@@ -12,7 +12,7 @@ const circleRadius = 50;
 let clientId = null;
 let clientCount = 0;
 
-titleElem.innerText = 'Touch Touch';
+titleElem.innerText = 'Test Johann';
 messageElem.innerText = '';
 window.addEventListener('resize', updateCanvasSize);
 
