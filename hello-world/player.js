@@ -1,4 +1,3 @@
-
 const titleDisplay = document.getElementById('title-display');
 const infoDisplay = document.getElementById('info-display');
 
