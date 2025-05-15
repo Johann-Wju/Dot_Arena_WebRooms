@@ -1,37 +1,24 @@
 const titleDisplay = document.getElementById('title-display');
 const infoDisplay = document.getElementById('info-display');
-
-// address of the WebSocket server
-const webRoomsWebSocketServerAddr = 'https://nosch.uber.space/web-rooms/';
+const playersDisplay = document.getElementById('players');
 
 // variables
 let clientId = null; // client ID sent by web-rooms server when calling 'enter-room'
 let clientCount = 0; // number of clients connected to the same room
 
 function start() {
-  console.log("Hello Console!"); // watch the console in the browser
-
-  // register simple click event on window
-  window.addEventListener('pointerdown', sendHelloThere);
+  console.log("Hello Console! Test Johann"); // watch the console in the browser
+  // !! CRASHES THE SERVER !!
+  // sendRequest('*get-client-ids*');
+  // sendRequest('*subscribe-client-enter-exit*');
+  // playersDisplay.innerHTML = ids.map(id => `<div>Player #${id + 1}</div>`).join('');
 };
-
-// send message 'hello-there' to all other clients
-function sendHelloThere() {
-  sendRequest('*broadcast-message*', ['hello-there', clientId]);
-  highlightText(infoDisplay); // highlight the info-display
-}
-
-function highlightText(elem) {
-  elem.classList.add('highlight-text');
-
-  setTimeout(() => {
-    elem.classList.remove('highlight-text');
-  }, 120);
-}
 
 /****************************************************************
  * websocket communication
  */
+// address of the WebSocket server
+const webRoomsWebSocketServerAddr = 'https://nosch.uber.space/web-rooms/';
 const socket = new WebSocket(webRoomsWebSocketServerAddr);
 
 // helper function to send requests over websocket to web-room server
@@ -77,13 +64,16 @@ socket.addEventListener('message', (event) => {
         infoDisplay.innerHTML = `#${clientId + 1}/${clientCount}`;
         break;
 
-      // 'hello there' messages sent from other clients
-      case 'hello-there':
-        const otherId = incoming[1];
-        console.log(`client #${otherId + 1} says 'Hello there!'`);
-
-        highlightText(titleDisplay); // highlight screen by others (function defined above)
+      case '*client-enter*': {
+        const newId = incoming[1];
+        console.log(`Client #${newId + 1} joined`);
         break;
+      }
+      case '*client-exit*': {
+        const leftId = incoming[1];
+        console.log(`Client #${leftId + 1} left`);
+        break;
+      }
 
       case '*error*': {
         const message = incoming[1];
