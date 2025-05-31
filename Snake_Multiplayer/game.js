@@ -164,13 +164,22 @@ socket.addEventListener('message', (event) => {
         const id = parseInt(idStr);
         if (id !== clientId) {
           const snakeState = data[1];
-          if (!snakes[id]) {
-            snakeState.color = getRandomBrightColor();
-            snakes[id] = snakeState;
-          } else {
-            const existingColor = snakes[id].color;
-            snakes[id] = snakeState;
-            snakes[id].color = existingColor || getRandomBrightColor();
+          if (selector.startsWith('snake-')) {
+            const idStr = selector.split('-')[1];
+            const id = parseInt(idStr);
+            if (id !== clientId) {
+              const snakeState = data[1];
+              if (!snakes[id]) {
+                snakes[id] = snakeState;
+              } else {
+                // Merge in updated state but keep the existing color if the incoming one is missing
+                snakes[id] = {
+                  ...snakes[id],
+                  ...snakeState,
+                  color: snakeState.color || snakes[id].color,
+                };
+              }
+            }
           }
         }
       }
@@ -234,23 +243,28 @@ function gameLoop() {
   mySnake.dx = direction.dx;
   mySnake.dy = direction.dy;
 
-  const speed = 0.2;
+  const speed = 1;
   mySnake.x += mySnake.dx * speed;
   mySnake.y += mySnake.dy * speed;
 
   mySnake.body.unshift({ x: mySnake.x, y: mySnake.y });
   if (mySnake.body.length > mySnake.size) mySnake.body.pop();
 
-  if (clientId === 0) {
-    for (let i = food.length - 1; i >= 0; i--) {
-      const f = food[i];
-      const dist = Math.hypot(mySnake.x - f.x, mySnake.y - f.y);
-      if (dist < 10) {
-        mySnake.size += 2;
-        food.splice(i, 1);
-        sendRequest('*set-data*', 'shared-food', food);
-      }
+  // *** EVERY client checks for food eaten ***
+  let ateFood = false;
+  for (let i = food.length - 1; i >= 0; i--) {
+    const f = food[i];
+    const dist = Math.hypot(mySnake.x - f.x, mySnake.y - f.y);
+    if (dist < 10) {
+      mySnake.size += 2;
+      food.splice(i, 1);
+      ateFood = true;
     }
+  }
+
+  // If ate food, update shared food data
+  if (ateFood) {
+    sendRequest('*set-data*', 'shared-food', food);
   }
 
   // Update own snake data
@@ -262,6 +276,7 @@ function gameLoop() {
   requestAnimationFrame(gameLoop);
 }
 
+
 function draw() {
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -270,7 +285,7 @@ function draw() {
   food.forEach((dot) => {
     ctx.fillStyle = 'lime';
     ctx.beginPath();
-    ctx.arc(dot.x, dot.y, 4, 0, Math.PI * 2);
+    ctx.arc(dot.x, dot.y, 6, 0, Math.PI * 2);
     ctx.fill();
   });
 
