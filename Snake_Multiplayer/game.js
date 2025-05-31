@@ -24,8 +24,8 @@ window.addEventListener('resize', resizeCanvas);
 resizeCanvas(); // set initially
 
 function resetGame() {
-  if (clientId == null || !snakes[clientId]) {
-    console.warn('Client ID not set yet — cannot reset.');
+  if (clientId !== 0) {
+    console.warn('Only client 0 can reset the game.');
     return;
   }
 
@@ -33,29 +33,44 @@ function resetGame() {
   direction = { dx: 1, dy: 0 };
 
   food.length = 0;
-  resizeCanvas();
   spawnFood();
 
   sendRequest('*player-state*', clientId, snakes[clientId]);
-  draw();
+  sendRequest('*set-data*', 'shared-food', food); // updates others
+
+  draw(); // make sure local view updates immediately
   updateInfo();
 }
 
 document.getElementById('reset-btn').addEventListener('click', resetGame);
 
+function getRandomBrightColor() {
+  const hue = Math.floor(Math.random() * 360); // 0-359
+  const saturation = 90 + Math.random() * 10; // 90-100%
+  const lightness = 50 + Math.random() * 10; // 50-60%
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+}
+
 // Initial snake setup
 function createSnake() {
+  // padding for the snakes to not spawn on the edges
+  const padding = 50;
+  const startX = padding + Math.random() * (canvas.width - 2 * padding);
+  const startY = padding + Math.random() * (canvas.height - 2 * padding);
   const body = [];
+
   for (let i = 0; i < 10; i++) {
-    body.push({ x: 100 - i * 5, y: 100 });
+    body.push({ x: startX - i * 5, y: startY });
   }
+
   return {
-    x: 100,
-    y: 100,
+    x: startX,
+    y: startY,
     dx: 1,
     dy: 0,
     body: body,
     size: 10,
+    color: getRandomBrightColor(),
   };
 }
 
@@ -81,7 +96,9 @@ socket.addEventListener('message', (event) => {
     case '*client-id*':
       clientId = data[1];
       snakes[clientId] = createSnake();
-
+      if (clientId !== 0) {
+        document.getElementById('reset-btn').style.display = 'none';
+      }
       // SAFE to initialize game-dependent state here
       direction = { dx: 1, dy: 0 };
       food.length = 0;
@@ -167,7 +184,7 @@ function gameLoop() {
   mySnake.dx = direction.dx;
   mySnake.dy = direction.dy;
 
-  const speed = 2;
+  const speed = 1;
   mySnake.x += mySnake.dx * speed;
   mySnake.y += mySnake.dy * speed;
 
@@ -211,12 +228,20 @@ function draw() {
   // Draw all snakes
   for (const id in snakes) {
     const s = snakes[id];
-    ctx.fillStyle = id == clientId ? 'cyan' : 'orange';
-    s.body.forEach((segment, i) => {
+    ctx.fillStyle = s.color || (id == clientId ? 'cyan' : 'orange'); // fallback color
+
+    s.body.forEach(segment => {
       ctx.beginPath();
       ctx.arc(segment.x, segment.y, 5, 0, Math.PI * 2);
       ctx.fill();
     });
+
+    // Draw client number above head
+    const head = s.body[0];
+    ctx.fillStyle = 'white';
+    ctx.font = '14px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(`#${clientId + 1}`, head.x, head.y - 10);
   }
 }
 
