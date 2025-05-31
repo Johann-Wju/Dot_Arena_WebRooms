@@ -1,4 +1,5 @@
-html, body {
+html,
+body {
   margin: 0;
   padding: 0;
   width: 100%;
@@ -17,7 +18,50 @@ canvas {
   top: 10px;
   left: 10px;
   z-index: 10;
-  background: rgb(255, 255, 255);
+  background: rgba(0, 0, 0, 0.5);
+  color: white;
+  font-family: Arial, sans-serif;
   padding: 5px 10px;
   border-radius: 5px;
+}
+
+#reset-btn {
+  background: rgba(0, 0, 0, 0.5);
+  color: white;
+  font-family: Arial, sans-serif;
+}
+
+#size-display {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: white;
+  font-size: 16px;
+  font-family: Arial, sans-serif;
+  z-index: 10;
+  pointer-events: none;
+}
+
+#leaderboard {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  background: rgba(0, 0, 0, 0.5);
+  color: white;
+  font-family: Arial, sans-serif;
+  padding: 8px 12px;
+  border-radius: 8px;
+  max-width: 150px;
+  z-index: 1000;
+  font-size: 14px;
+  pointer-events: none;
+  /* so clicks pass through */
+  user-select: none;
+}
+
+#leaderboard-list {
+  margin: 4px 0 0 12px;
+  padding: 0;
+  list-style-position: inside;
 }
