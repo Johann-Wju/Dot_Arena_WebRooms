@@ -2,15 +2,17 @@ const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
 const infoDisplay = document.getElementById('info-display');
 
+// WebSocket setup
 const serverAddr = 'wss://nosch.uber.space/web-rooms/';
 const socket = new WebSocket(serverAddr);
-
 let clientId = null;
 let clientCount = 0;
 
-const snakes = {}; // key: clientId string, value: snake state
+// Game state
+const snakes = {}; // key: clientId, value: {x, y, dx, dy, body, size}
 const food = [];
 
+// Controls
 let direction = { dx: 1, dy: 0 };
 
 function resizeCanvas() {
@@ -19,43 +21,7 @@ function resizeCanvas() {
 }
 
 window.addEventListener('resize', resizeCanvas);
-resizeCanvas();
-
-function getRandomBrightColor() {
-  const hue = Math.floor(Math.random() * 360);
-  const saturation = 90 + Math.random() * 10;
-  const lightness = 50 + Math.random() * 10;
-  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
-}
-
-function createSnake() {
-  const padding = 50;
-  const startX = padding + Math.random() * (canvas.width - 2 * padding);
-  const startY = padding + Math.random() * (canvas.height - 2 * padding);
-  const body = [];
-  for (let i = 0; i < 10; i++) {
-    body.push({ x: startX - i * 5, y: startY });
-  }
-  return {
-    x: startX,
-    y: startY,
-    dx: 1,
-    dy: 0,
-    body,
-    size: 10,
-    color: getRandomBrightColor(),
-  };
-}
-
-// Subscribe to a snake data key
-function subscribeSnakeKey(id) {
-  sendRequest('*subscribe-data*', `snake-${id}`);
-}
-
-// Unsubscribe snake data key when client leaves (optional)
-function unsubscribeSnakeKey(id) {
-  sendRequest('*unsubscribe-data*', `snake-${id}`);
-}
+resizeCanvas(); // set initially
 
 function resetGame() {
   if (clientId !== 0) {
@@ -63,7 +29,7 @@ function resetGame() {
     return;
   }
 
-  const oldColor = snakes[clientId]?.color || getRandomBrightColor();
+  const oldColor = snakes[clientId].color || getRandomBrightColor();
   snakes[clientId] = createSnake();
   snakes[clientId].color = oldColor;
   direction = { dx: 1, dy: 0 };
@@ -71,27 +37,59 @@ function resetGame() {
   food.length = 0;
   spawnFood();
 
-  sendRequest('*set-data*', `snake-${clientId}`, snakes[clientId]);
-  sendRequest('*set-data*', 'shared-food', food);
+  sendRequest('*player-state*', clientId, snakes[clientId]);
+  sendRequest('*set-data*', 'shared-food', food); // updates others
 
-  draw();
+  draw(); // make sure local view updates immediately
   updateInfo();
 }
 
 document.getElementById('reset-btn').addEventListener('click', resetGame);
 
+function getRandomBrightColor() {
+  const hue = Math.floor(Math.random() * 360); // 0-359
+  const saturation = 90 + Math.random() * 10; // 90-100%
+  const lightness = 50 + Math.random() * 10; // 50-60%
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+}
+
+// Initial snake setup
+function createSnake() {
+  // padding for the snakes to not spawn on the edges
+  const padding = 50;
+  const startX = padding + Math.random() * (canvas.width - 2 * padding);
+  const startY = padding + Math.random() * (canvas.height - 2 * padding);
+  const body = [];
+
+  for (let i = 0; i < 10; i++) {
+    body.push({ x: startX - i * 5, y: startY });
+  }
+
+  return {
+    x: startX,
+    y: startY,
+    dx: 1,
+    dy: 0,
+    body: body,
+    size: 10,
+    color: getRandomBrightColor(),
+  };
+}
+
+// Handle WebSocket connection
 socket.addEventListener('open', () => {
   sendRequest('*enter-room*', 'snake-room');
   sendRequest('*subscribe-client-count*');
-  sendRequest('*subscribe-data*', 'shared-food'); // food updates
-
+  sendRequest('*subscribe-data*', 'shared-food'); // 👈 SUBSCRIBE to food updates
   setInterval(() => socket.send(''), 30000); // keep alive
 });
 
+// Send messages
 function sendRequest(...msg) {
   socket.send(JSON.stringify(msg));
 }
 
+// Handle messages
 socket.addEventListener('message', (event) => {
   const data = JSON.parse(event.data);
   const selector = data[0];
@@ -103,79 +101,68 @@ socket.addEventListener('message', (event) => {
       if (clientId !== 0) {
         document.getElementById('reset-btn').style.display = 'none';
       }
+      // SAFE to initialize game-dependent state here
       direction = { dx: 1, dy: 0 };
       food.length = 0;
       resizeCanvas();
       spawnFood();
-
-      // Subscribe to all snake data keys for other clients
-      // We'll do this after getting client count
+      sendRequest('*player-state*', clientId, snakes[clientId]);
       updateInfo();
       draw();
-      break;
 
+      console.log('Client ID assigned:', clientId);
+      console.log('Initial snake:', snakes[clientId]);
+      break;
     case '*client-count*':
       clientCount = data[1];
       updateInfo();
-
-      // Subscribe to all snake keys for clients except self
-      for (let i = 0; i < clientCount; i++) {
-        if (i !== clientId) {
-          subscribeSnakeKey(i);
-        }
-      }
-      // Also subscribe own snake key for data consistency
-      subscribeSnakeKey(clientId);
-
       break;
-
-    case '*client-enter*': {
-      const newClientId = data[1];
-      clientCount++;
-      updateInfo();
-      if (newClientId !== clientId) {
-        subscribeSnakeKey(newClientId);
-      }
+    case '*client-enter*':
+    case '*client-exit*':
+      sendRequest('*subscribe-client-count*');
       break;
-    }
-
-    case '*client-exit*': {
-      const leftClientId = data[1];
-      clientCount--;
-      updateInfo();
-      if (snakes[leftClientId]) {
-        delete snakes[leftClientId];
-      }
-      unsubscribeSnakeKey(leftClientId);
-      break;
-    }
-
     case 'shared-food': {
       const [, value] = data;
       food.length = 0;
       food.push(...value);
       break;
     }
-
-    default: {
-      // Handle data updates for snakes and food
-      if (selector.startsWith('snake-')) {
-        const idStr = selector.split('-')[1];
-        const id = parseInt(idStr);
+    case '*broadcast-message*': {
+      const message = data[1];
+      if (Array.isArray(message) && message[0] === '*player-state*') {
+        const [_, id, state] = message;
         if (id !== clientId) {
-          const snakeState = data[1];
+          console.log(`Client ${clientId} RECEIVED state from client ${id}:`, state);
           if (!snakes[id]) {
-            snakeState.color = getRandomBrightColor();
-            snakes[id] = snakeState;
+            state.color = getRandomBrightColor();
+            snakes[id] = state;
           } else {
             const existingColor = snakes[id].color;
-            snakes[id] = snakeState;
+            snakes[id] = state;
             snakes[id].color = existingColor || getRandomBrightColor();
           }
         }
       }
       break;
     }
+
+    /*
+    case '*player-state*': {
+      const [_, id, state] = data;
+      console.log('Received player state:', id, state);
+      if (id !== clientId) {
+        if (!snakes[id]) {
+          state.color = getRandomBrightColor();
+          snakes[id] = state;
+        } else {
+          const existingColor = snakes[id].color;
+          snakes[id] = state;
+          snakes[id].color = existingColor || getRandomBrightColor();
+        }
+      }
+      break;
+    }
+    */
   }
 });
 
@@ -183,28 +170,22 @@ socket.addEventListener('close', () => {
   infoDisplay.textContent = 'Disconnected';
 });
 
+// Update display info
 function updateInfo() {
   if (clientId == null) {
-    infoDisplay.textContent = 'Connecting...';
+    infoDisplay.textContent = `Connecting...`;
   } else {
     infoDisplay.textContent = `You: #${clientId + 1} | Players: ${clientCount}`;
   }
 }
 
+// Movement input
 window.addEventListener('keydown', (e) => {
   switch (e.key) {
-    case 'ArrowUp':
-      if (direction.dy === 0) direction = { dx: 0, dy: -1 };
-      break;
-    case 'ArrowDown':
-      if (direction.dy === 0) direction = { dx: 0, dy: 1 };
-      break;
-    case 'ArrowLeft':
-      if (direction.dx === 0) direction = { dx: -1, dy: 0 };
-      break;
-    case 'ArrowRight':
-      if (direction.dx === 0) direction = { dx: 1, dy: 0 };
-      break;
+    case 'ArrowUp': if (direction.dy === 0) direction = { dx: 0, dy: -1 }; break;
+    case 'ArrowDown': if (direction.dy === 0) direction = { dx: 0, dy: 1 }; break;
+    case 'ArrowLeft': if (direction.dx === 0) direction = { dx: -1, dy: 0 }; break;
+    case 'ArrowRight': if (direction.dx === 0) direction = { dx: 1, dy: 0 }; break;
     case 'r':
     case 'R':
       resetGame();
@@ -212,25 +193,25 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+// Food generation
 function spawnFood() {
-  if (clientId !== 0) return;
+  if (clientId !== 0) return; // Only first client manages food
 
   while (food.length < 20) {
     food.push({
       x: Math.random() * canvas.width,
-      y: Math.random() * canvas.height,
+      y: Math.random() * canvas.height
     });
   }
 
   sendRequest('*set-data*', 'shared-food', food);
 }
 
+// Game loop
 function gameLoop() {
-  if (clientId == null) return requestAnimationFrame(gameLoop);
+  if (clientId === null || clientId === undefined) return requestAnimationFrame(gameLoop);
 
   const mySnake = snakes[clientId];
-  if (!mySnake) return requestAnimationFrame(gameLoop);
-
   mySnake.dx = direction.dx;
   mySnake.dy = direction.dy;
 
@@ -241,6 +222,7 @@ function gameLoop() {
   mySnake.body.unshift({ x: mySnake.x, y: mySnake.y });
   if (mySnake.body.length > mySnake.size) mySnake.body.pop();
 
+  // Eat food
   if (clientId === 0) {
     for (let i = food.length - 1; i >= 0; i--) {
       const f = food[i];
@@ -248,43 +230,48 @@ function gameLoop() {
       if (dist < 10) {
         mySnake.size += 2;
         food.splice(i, 1);
-        sendRequest('*set-data*', 'shared-food', food);
+        sendRequest('*set-data*', 'shared-food', food); // 👈 update shared data
       }
     }
   }
 
-  // Update own snake data
-  sendRequest('*set-data*', `snake-${clientId}`, mySnake);
+  // Broadcast own snake
+  sendRequest('*broadcast-message*', ['*player-state*', clientId, snakes[clientId]]);
+  console.log('Broadcasting my player state:', clientId, snakes[clientId]);
 
   draw();
   spawnFood();
-
   requestAnimationFrame(gameLoop);
 }
 
+// Draw game
 function draw() {
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   // Draw food
-  food.forEach((dot) => {
+  food.forEach(dot => {
     ctx.fillStyle = 'lime';
     ctx.beginPath();
     ctx.arc(dot.x, dot.y, 4, 0, Math.PI * 2);
     ctx.fill();
   });
 
-  // Draw snakes
+  // Debug: list all snake IDs currently in the game
+  console.log(`Drawing snakes for client ${clientId}:`, Object.keys(snakes));
+
+  // Draw all snakes
   for (const id in snakes) {
     const s = snakes[id];
-    ctx.fillStyle = s.color || (parseInt(id) === clientId ? 'cyan' : 'orange');
+    ctx.fillStyle = s.color || (id == clientId ? 'cyan' : 'orange'); // fallback color
 
-    s.body.forEach((segment) => {
+    s.body.forEach(segment => {
       ctx.beginPath();
       ctx.arc(segment.x, segment.y, 5, 0, Math.PI * 2);
       ctx.fill();
     });
 
+    // Draw client number above head
     const head = s.body[0];
     ctx.fillStyle = 'white';
     ctx.font = '14px Arial';
