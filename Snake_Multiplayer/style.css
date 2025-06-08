@@ -60,6 +60,23 @@ canvas {
   user-select: none;
 }
 
+#message {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 5px;
+  font-family: Arial, sans-serif;
+  font-size: 16px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+  z-index: 1000;
+}
+
 #leaderboard-list {
   margin: 4px 0 0 12px;
   padding: 0;
