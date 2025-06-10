@@ -304,7 +304,7 @@ function gameLoop() {
 
   if (powerup && Math.hypot(s.x - powerup.x, s.y - powerup.y) < 10) {
     s.hasPowerup = true;
-    powerup = null;
+    powerup = null; 
     sendRequest('*set-data*', 'shared-powerup', null);
 
     if (powerupTimers[clientId]) clearTimeout(powerupTimers[clientId]);
