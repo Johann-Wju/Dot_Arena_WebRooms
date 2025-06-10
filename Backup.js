@@ -26,6 +26,7 @@ let powerupMessage = '';
 let powerupMessageOpacity = 0;
 let powerupMessageHue = 0;
 let powerupMessageTimeout = null;
+let powerupRemainingTime = 0;
 
 const snakes = {};              // { id: snakeObject }
 const food = [];                // Array of food objects
@@ -325,6 +326,15 @@ function gameLoop() {
     powerupMessage = 'Powered Up!';
     powerupMessageOpacity = 1;
     powerupMessageHue = 0;
+
+    powerupRemainingTime = 25; // Initialize 10 seconds timer here
+  }
+
+  if (s.hasPowerup && powerupRemainingTime > 0) {
+    powerupRemainingTime -= 1 / 60; // assuming 60fps
+    if (powerupRemainingTime < 0) powerupRemainingTime = 0;
+  } else {
+    powerupRemainingTime = 0;
   }
 
   draw();
@@ -439,6 +449,13 @@ function draw() {
     ctx.shadowColor = 'black';
     ctx.shadowBlur = 8;
     ctx.fillText(powerupMessage, canvas.width / 2, canvas.height / 2);
+
+    // NEW: Draw timer below
+    if (powerupRemainingTime > 0) {
+      ctx.font = '32px Arial';
+      ctx.fillText(powerupRemainingTime.toFixed(1) + 's', canvas.width / 2, canvas.height / 2 + 60);
+    }
+
     ctx.restore();
   }
 }
