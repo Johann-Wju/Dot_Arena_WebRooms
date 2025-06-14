@@ -29,7 +29,7 @@ let powerupMessageTimeout = null;
 let powerupRemainingTime = 0;
 
 let lastSendTime = 0;
-const SEND_INTERVAL = 10; // milliseconds
+const SEND_INTERVAL = 50; // milliseconds (i.e., 10 times per second)
 
 const snakes = {};              // { id: snakeObject }
 const food = [];                // Array of food objects
@@ -104,6 +104,9 @@ function createSnake() {
   const padding = 50;
   const x = padding + Math.random() * (canvas.width - 2 * padding);
   const y = padding + Math.random() * (canvas.height - 2 * padding);
+  // TODO 
+  // Bug when snakesize excedes 400-500 length. Weird behaviour of food spawning
+  // Probably a server High Ping problem
   const body = [{ x, y }] // Start with just the head
   return {
     x, y, dx: 1, dy: 0, body, size: 10,
