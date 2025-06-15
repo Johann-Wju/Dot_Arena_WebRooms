@@ -31,16 +31,22 @@ canvas {
   font-family: Arial, sans-serif;
 }
 
-#size-display {
-  position: fixed;
+#info-container {
+  position: fixed; /* or absolute, depending on your layout */
   top: 10px;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  gap: 10px; /* space between size and timer */
+  z-index: 10;
+  pointer-events: none;
+}
+
+#size-display,
+#timer-display {
   color: white;
   font-size: 16px;
   font-family: Arial, sans-serif;
-  z-index: 10;
-  pointer-events: none;
 }
 
 #leaderboard {

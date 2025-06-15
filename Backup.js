@@ -14,7 +14,6 @@ const serverAddr = 'wss://nosch.uber.space/web-rooms/';
 const socket = new WebSocket(serverAddr);
 
 const DotDrawSize = 10;
-const gameOverClients = new Set();
 
 // =========================
 // Game State
@@ -33,7 +32,7 @@ let powerupTimerDisplay = 0;
 let powerupRemainingTime = 0;
 
 let lastSendTime = 0;
-const SEND_INTERVAL = 30; // milliseconds
+const SEND_INTERVAL = 20; // milliseconds
 
 // Changed to Dots
 const dots = {};              // { id: dotObject }
@@ -203,20 +202,6 @@ socket.addEventListener('message', ({ data }) => {
   const msg = JSON.parse(data);
   const [selector, payload] = msg;
 
-  if (selector === 'game-over' && payload === 'game-over') {
-    gameOverClients.add(clientId);
-
-    // Cleanup own dot and unsubscribe from own dot data
-    if (dots[clientId]) {
-      delete dots[clientId];
-      unsubscribeDotKey(clientId);
-    }
-
-    updateLeaderboard();
-    showMessage('You got eaten! GAME OVER', 5000);
-    draw();
-  }
-
   if (selector.startsWith('dot-')) {
     const id = +selector.split('-')[1];
     if (id !== clientId) {
@@ -257,17 +242,6 @@ socket.addEventListener('message', ({ data }) => {
       updateInfo();
       showMessage(`You joined as Player #${clientId + 1}`);
       draw();
-      break;
-
-    case 'game-over':
-      if (payload === 'game-over') {
-        gameOverClients.add(clientId);
-        delete dots[clientId];
-        unsubscribeDotKey(clientId);
-        updateLeaderboard();
-        showMessage('You got eaten! GAME OVER', 5000);
-        draw();
-      }
       break;
 
     case '*client-count*':
@@ -320,7 +294,7 @@ function gameLoop(currentTime) {
   const delta = (currentTime - lastFrameTime) / 1000;
   lastFrameTime = currentTime;
   const s = dots[clientId];
-  if (!s) return requestAnimationFrame(gameLoop);
+  if (!s) return requestAnimationFrame(gameLoop); // Prevent actions if eaten
 
   if (targetPosition) {
     const dx = targetPosition.x - s.x;
@@ -344,6 +318,27 @@ function gameLoop(currentTime) {
       s.size += 2
       food.splice(i, 1);
       ate = true;
+    }
+  }
+
+  // Check if powered-up player eats others
+  if (s.hasPowerup) {
+    for (const otherId in dots) {
+      if (+otherId === clientId) continue;
+      const other = dots[otherId];
+      const distance = Math.hypot(s.x - other.x, s.y - other.y);
+      if (distance < DotDrawSize * 2) {
+        // Eat the other player
+        s.size += other.size;
+
+        delete dots[otherId];
+        delete dotLastUpdated[otherId];
+
+        sendRequest('*set-data*', `dot-${otherId}`, null); // Broadcast removal
+        unsubscribeDotKey(otherId); // Unsubscribe locally
+
+        if (clientId === 0) checkAndRespawnPowerup(); // Recheck powerup if needed
+      }
     }
   }
 
@@ -416,46 +411,6 @@ function gameLoop(currentTime) {
       checkAndRespawnPowerup();
     }
   }
-
-  if (s.hasPowerup && !gameOverClients.has(clientId)) {
-    // Check collision with other dots to eat
-    for (const otherId in dots) {
-      if (otherId == clientId) continue;
-      const otherDot = dots[otherId];
-      if (gameOverClients.has(+otherId)) continue; // ignore dead players
-
-      const dist = Math.hypot(s.x - otherDot.x, s.y - otherDot.y);
-      if (dist < DotDrawSize * 2) {
-        // Eat the other dot
-        s.size += otherDot.size;
-
-        // Remove the eaten dot for everyone
-        sendRequest('*set-data*', `dot-${otherId}`, null);
-        unsubscribeDotKey(+otherId);
-        delete dots[otherId];
-
-        // Notify the eaten client that they lost
-        if (+otherId === clientId) {
-          gameOverClients.add(clientId); // Mark self as game over immediately
-        } else {
-          sendRequest('*send-to-client*', +otherId, 'game-over');
-        }
-
-        updateLeaderboard();
-        draw();
-      }
-    }
-  }
-
-  if (gameOverClients.has(clientId)) {
-    // Skip game logic for this player (spectator mode)
-    draw();
-    updateLeaderboard();
-    updateSizeDisplay();
-    requestAnimationFrame(gameLoop);
-    return;
-  }
-
 
   draw();
   updateLeaderboard();
@@ -536,20 +491,6 @@ function draw() {
     ctx.fill();
   });
 
-  if (gameOverClients.has(clientId)) {
-    // Draw game over screen for current player
-    ctx.fillStyle = 'rgba(0,0,0,0.8)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    ctx.font = '72px Arial';
-    ctx.fillStyle = 'red';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2);
-
-    return; // Skip drawing dots & food for this player
-  }
-
   if (powerup) {
     ctx.save();
 
@@ -579,8 +520,10 @@ function draw() {
   for (const id in dots) {
     const s = dots[id];
 
+    // Skip drawing own dot if it was deleted (eaten)
+    if (+id === clientId && !s) continue;
+
     if (s.hasPowerup) {
-      // Cycle hue for rainbow effect
       s.rainbowPhase = (s.rainbowPhase + 5) % 360;
       ctx.fillStyle = `hsl(${s.rainbowPhase}, 100%, 50%)`;
     } else {
@@ -588,15 +531,12 @@ function draw() {
     }
 
     ctx.beginPath();
-    // Dot draw
     ctx.arc(s.x, s.y, DotDrawSize, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.fillStyle = 'white';
     ctx.font = '14px Arial';
     ctx.textAlign = 'center';
-
-    // Draw client number and size score
     ctx.fillText(`#${+id + 1}: ${Math.floor(s.size)}`, s.x, s.y - 10);
   }
 
