@@ -1,4 +1,4 @@
-// BROKEN VERSION
+// LAST STABLE VERSION
 // =========================
 // Constants & DOM Elements
 // =========================
@@ -31,6 +31,9 @@ let powerupMessageTimeout = null;
 let powerupTimerDisplay = 0;
 let powerupRemainingTime = 0;
 
+let globalTimerSeconds = 0;    // Remaining seconds on the global timer
+let globalTimerInterval = null;
+
 let lastSendTime = 0;
 const SEND_INTERVAL = 20; // milliseconds
 
@@ -43,6 +46,7 @@ const dotLastUpdated = {};    // { id: timestamp }
 // =========================
 // Initialization
 // =========================
+updateTimerDisplay();
 resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
 resetBtn.addEventListener('click', resetGame);
@@ -185,6 +189,13 @@ function updateSizeDisplay() {
   sizeDisplay.textContent = s ? `Size: ${s.size}` : '';
 }
 
+function updateTimerDisplay() {
+  const minutes = Math.floor(globalTimerSeconds / 60);
+  const seconds = globalTimerSeconds % 60;
+  const formatted = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  document.getElementById('timer-display').textContent = `Time Left: ${formatted}`;
+}
+
 // =========================
 // WebSocket Events
 // =========================
@@ -194,6 +205,7 @@ socket.addEventListener('open', () => {
   sendRequest('*subscribe-client-entries*');
   sendRequest('*subscribe-data*', 'shared-food');
   sendRequest('*subscribe-data*', 'shared-powerup');
+  sendRequest('*subscribe-data*', 'shared-timer');
 
   setInterval(() => socket.send(''), 30000);
 });
@@ -238,6 +250,22 @@ socket.addEventListener('message', ({ data }) => {
           if (food.length < 40) spawnFood();
         }, 1000);
         checkAndRespawnPowerup();
+
+        // Start global timer when first client joins
+        if (!globalTimerInterval) {
+          globalTimerSeconds = 120; // 2 minutes
+          globalTimerInterval = setInterval(() => {
+            if (globalTimerSeconds > 0) {
+              globalTimerSeconds--;
+              updateTimerDisplay();
+              // Optionally send timer update to all clients here
+              sendRequest('*set-data*', 'shared-timer', globalTimerSeconds);
+            } else {
+              clearInterval(globalTimerInterval);
+              globalTimerInterval = null;
+            }
+          }, 1000);
+        }
       }
       updateInfo();
       showMessage(`You joined as Player #${clientId + 1}`);
@@ -273,6 +301,11 @@ socket.addEventListener('message', ({ data }) => {
     case 'shared-powerup':
       powerup = payload;
       break;
+
+    case 'shared-timer':
+      globalTimerSeconds = payload ?? 0;
+      updateTimerDisplay();
+      break;
   }
 });
 
@@ -294,7 +327,7 @@ function gameLoop(currentTime) {
   const delta = (currentTime - lastFrameTime) / 1000;
   lastFrameTime = currentTime;
   const s = dots[clientId];
-  if (!s) return requestAnimationFrame(gameLoop); // Prevent actions if eaten
+  if (!s) return requestAnimationFrame(gameLoop);
 
   if (targetPosition) {
     const dx = targetPosition.x - s.x;
@@ -318,27 +351,6 @@ function gameLoop(currentTime) {
       s.size += 2
       food.splice(i, 1);
       ate = true;
-    }
-  }
-
-  // Check if powered-up player eats others
-  if (s.hasPowerup) {
-    for (const otherId in dots) {
-      if (+otherId === clientId) continue;
-      const other = dots[otherId];
-      const distance = Math.hypot(s.x - other.x, s.y - other.y);
-      if (distance < DotDrawSize * 2) {
-        // Eat the other player
-        s.size += other.size;
-
-        delete dots[otherId];
-        delete dotLastUpdated[otherId];
-
-        sendRequest('*set-data*', `dot-${otherId}`, null); // Broadcast removal
-        unsubscribeDotKey(otherId); // Unsubscribe locally
-
-        if (clientId === 0) checkAndRespawnPowerup(); // Recheck powerup if needed
-      }
     }
   }
 
@@ -520,10 +532,8 @@ function draw() {
   for (const id in dots) {
     const s = dots[id];
 
-    // Skip drawing own dot if it was deleted (eaten)
-    if (+id === clientId && !s) continue;
-
     if (s.hasPowerup) {
+      // Cycle hue for rainbow effect
       s.rainbowPhase = (s.rainbowPhase + 5) % 360;
       ctx.fillStyle = `hsl(${s.rainbowPhase}, 100%, 50%)`;
     } else {
@@ -531,12 +541,15 @@ function draw() {
     }
 
     ctx.beginPath();
+    // Dot draw
     ctx.arc(s.x, s.y, DotDrawSize, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.fillStyle = 'white';
     ctx.font = '14px Arial';
     ctx.textAlign = 'center';
+
+    // Draw client number and size score
     ctx.fillText(`#${+id + 1}: ${Math.floor(s.size)}`, s.x, s.y - 10);
   }
 

@@ -1,4 +1,4 @@
-// LAST STABLE VERSION
+// LAST STABLE VERSION (Before Timer)
 // =========================
 // Constants & DOM Elements
 // =========================
