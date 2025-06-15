@@ -1,4 +1,4 @@
-// LAST STABLE VERSION
+// LAST STABLE VERSION (Before Game Ending)
 // =========================
 // Constants & DOM Elements
 // =========================

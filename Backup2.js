@@ -1,4 +1,4 @@
-// LAST STABLE VERSION (Before Timer)
+// LAST STABLE VERSION
 // =========================
 // Constants & DOM Elements
 // =========================
@@ -31,6 +31,11 @@ let powerupMessageTimeout = null;
 let powerupTimerDisplay = 0;
 let powerupRemainingTime = 0;
 
+let globalTimerSeconds = 0;    // Remaining seconds on the global timer
+let globalTimerInterval = null;
+
+let gameEnded = false;
+
 let lastSendTime = 0;
 const SEND_INTERVAL = 20; // milliseconds
 
@@ -43,6 +48,7 @@ const dotLastUpdated = {};    // { id: timestamp }
 // =========================
 // Initialization
 // =========================
+updateTimerDisplay();
 resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
 resetBtn.addEventListener('click', resetGame);
@@ -132,15 +138,9 @@ function cleanupDot(id) {
 
 function resetGame() {
   if (clientId !== 0) return console.warn('Only Player #1 can reset.');
-  const oldColor = dots[clientId]?.color || getRandomBrightColor();
-  dots[clientId] = createDot();
-  dots[clientId].color = oldColor;
-  food.length = 0;
-  spawnFood();
-  sendRequest('*set-data*', `dot-${clientId}`, dots[clientId]);
-  sendRequest('*set-data*', 'shared-food', food);
-  updateInfo();
-  draw();
+
+  // Instead of just sending '*reset-all*', set shared-reset flag for all clients:
+  sendRequest('*set-data*', 'shared-reset', true);
 }
 
 // =========================
@@ -185,6 +185,13 @@ function updateSizeDisplay() {
   sizeDisplay.textContent = s ? `Size: ${s.size}` : '';
 }
 
+function updateTimerDisplay() {
+  const minutes = Math.floor(globalTimerSeconds / 60);
+  const seconds = globalTimerSeconds % 60;
+  const formatted = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  document.getElementById('timer-display').textContent = `Time Left: ${formatted}`;
+}
+
 // =========================
 // WebSocket Events
 // =========================
@@ -194,6 +201,9 @@ socket.addEventListener('open', () => {
   sendRequest('*subscribe-client-entries*');
   sendRequest('*subscribe-data*', 'shared-food');
   sendRequest('*subscribe-data*', 'shared-powerup');
+  sendRequest('*subscribe-data*', 'shared-timer');
+  sendRequest('*subscribe-data*', 'shared-game-ended');
+  sendRequest('*subscribe-data*', 'shared-reset');
 
   setInterval(() => socket.send(''), 30000);
 });
@@ -201,6 +211,11 @@ socket.addEventListener('open', () => {
 socket.addEventListener('message', ({ data }) => {
   const msg = JSON.parse(data);
   const [selector, payload] = msg;
+
+  if (selector === '*reset-all*') {
+    window.location.reload();
+    return;
+  }
 
   if (selector.startsWith('dot-')) {
     const id = +selector.split('-')[1];
@@ -238,6 +253,25 @@ socket.addEventListener('message', ({ data }) => {
           if (food.length < 40) spawnFood();
         }, 1000);
         checkAndRespawnPowerup();
+
+        // Start global timer when first client joins
+        if (!globalTimerInterval) {
+          globalTimerSeconds = 120; // 2 minutes
+          globalTimerInterval = setInterval(() => {
+            if (globalTimerSeconds > 0) {
+              globalTimerSeconds--;
+              updateTimerDisplay();
+              sendRequest('*set-data*', 'shared-timer', globalTimerSeconds);
+            } else {
+              clearInterval(globalTimerInterval);
+              globalTimerInterval = null;
+              gameEnded = true;  // <- flag game ended here
+
+              // Broadcast game ended state
+              sendRequest('*set-data*', 'shared-game-ended', true);
+            }
+          }, 1000);
+        }
       }
       updateInfo();
       showMessage(`You joined as Player #${clientId + 1}`);
@@ -273,6 +307,29 @@ socket.addEventListener('message', ({ data }) => {
     case 'shared-powerup':
       powerup = payload;
       break;
+
+    case 'shared-timer':
+      globalTimerSeconds = payload ?? 0;
+      updateTimerDisplay();
+      break;
+
+    case 'shared-game-ended':
+      gameEnded = payload === true;
+      if (gameEnded) {
+        // Optionally hide/reset UI elements except reset button for client 0
+        if (clientId !== 0) {
+          resetBtn.style.display = 'none';
+        } else {
+          resetBtn.style.display = 'block';
+        }
+      }
+      break;
+
+    case 'shared-reset':
+      if (payload === true) {
+        window.location.reload();
+      }
+      break;
   }
 });
 
@@ -291,6 +348,34 @@ socket.addEventListener('close', () => {
 // =========================
 let lastFrameTime = performance.now();
 function gameLoop(currentTime) {
+  if (gameEnded) {
+    // Clear screen black
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Draw leaderboard text
+    ctx.fillStyle = 'white';
+    ctx.font = '32px Arial';
+    ctx.textAlign = 'center';
+
+    ctx.fillText('Game Over - Top 5 Players:', canvas.width / 2, 80);
+
+    // Get top 5 players sorted by size
+    const topPlayers = Object.entries(dots)
+      .sort(([, a], [, b]) => b.size - a.size)
+      .slice(0, 5);
+
+    topPlayers.forEach(([id, s], i) => {
+      ctx.fillText(`#${parseInt(id) + 1}: Size ${Math.floor(s.size)}`, canvas.width / 2, 130 + i * 40);
+    });
+
+    // Keep update leaderboard and size display if needed
+    // updateLeaderboard();
+    updateSizeDisplay();
+
+    requestAnimationFrame(gameLoop);
+    return;  // skip rest of game logic
+  }
   const delta = (currentTime - lastFrameTime) / 1000;
   lastFrameTime = currentTime;
   const s = dots[clientId];
@@ -420,6 +505,8 @@ function checkAndRespawnPowerup() {
 
 function startStaleDotCleanup() {
   setInterval(() => {
+    if (gameEnded) return;
+
     const now = Date.now();
     for (const id in dotLastUpdated) {
       if (+id !== clientId && now - dotLastUpdated[id] > 5000) {

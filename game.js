@@ -34,6 +34,8 @@ let powerupRemainingTime = 0;
 let globalTimerSeconds = 0;    // Remaining seconds on the global timer
 let globalTimerInterval = null;
 
+let gameEnded = false;
+
 let lastSendTime = 0;
 const SEND_INTERVAL = 20; // milliseconds
 
@@ -136,15 +138,9 @@ function cleanupDot(id) {
 
 function resetGame() {
   if (clientId !== 0) return console.warn('Only Player #1 can reset.');
-  const oldColor = dots[clientId]?.color || getRandomBrightColor();
-  dots[clientId] = createDot();
-  dots[clientId].color = oldColor;
-  food.length = 0;
-  spawnFood();
-  sendRequest('*set-data*', `dot-${clientId}`, dots[clientId]);
-  sendRequest('*set-data*', 'shared-food', food);
-  updateInfo();
-  draw();
+
+  // Instead of just sending '*reset-all*', set shared-reset flag for all clients:
+  sendRequest('*set-data*', 'shared-reset', true);
 }
 
 // =========================
@@ -206,6 +202,8 @@ socket.addEventListener('open', () => {
   sendRequest('*subscribe-data*', 'shared-food');
   sendRequest('*subscribe-data*', 'shared-powerup');
   sendRequest('*subscribe-data*', 'shared-timer');
+  sendRequest('*subscribe-data*', 'shared-game-ended');
+  sendRequest('*subscribe-data*', 'shared-reset');
 
   setInterval(() => socket.send(''), 30000);
 });
@@ -213,6 +211,11 @@ socket.addEventListener('open', () => {
 socket.addEventListener('message', ({ data }) => {
   const msg = JSON.parse(data);
   const [selector, payload] = msg;
+
+  if (selector === '*reset-all*') {
+    window.location.reload();
+    return;
+  }
 
   if (selector.startsWith('dot-')) {
     const id = +selector.split('-')[1];
@@ -258,11 +261,14 @@ socket.addEventListener('message', ({ data }) => {
             if (globalTimerSeconds > 0) {
               globalTimerSeconds--;
               updateTimerDisplay();
-              // Optionally send timer update to all clients here
               sendRequest('*set-data*', 'shared-timer', globalTimerSeconds);
             } else {
               clearInterval(globalTimerInterval);
               globalTimerInterval = null;
+              gameEnded = true;  // <- flag game ended here
+
+              // Broadcast game ended state
+              sendRequest('*set-data*', 'shared-game-ended', true);
             }
           }, 1000);
         }
@@ -306,6 +312,24 @@ socket.addEventListener('message', ({ data }) => {
       globalTimerSeconds = payload ?? 0;
       updateTimerDisplay();
       break;
+
+    case 'shared-game-ended':
+      gameEnded = payload === true;
+      if (gameEnded) {
+        // Optionally hide/reset UI elements except reset button for client 0
+        if (clientId !== 0) {
+          resetBtn.style.display = 'none';
+        } else {
+          resetBtn.style.display = 'block';
+        }
+      }
+      break;
+
+    case 'shared-reset':
+      if (payload === true) {
+        window.location.reload();
+      }
+      break;
   }
 });
 
@@ -324,6 +348,34 @@ socket.addEventListener('close', () => {
 // =========================
 let lastFrameTime = performance.now();
 function gameLoop(currentTime) {
+  if (gameEnded) {
+    // Clear screen black
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Draw leaderboard text
+    ctx.fillStyle = 'white';
+    ctx.font = '32px Arial';
+    ctx.textAlign = 'center';
+
+    ctx.fillText('Game Over - Top 5 Players:', canvas.width / 2, 80);
+
+    // Get top 5 players sorted by size
+    const topPlayers = Object.entries(dots)
+      .sort(([, a], [, b]) => b.size - a.size)
+      .slice(0, 5);
+
+    topPlayers.forEach(([id, s], i) => {
+      ctx.fillText(`#${parseInt(id) + 1}: Size ${Math.floor(s.size)}`, canvas.width / 2, 130 + i * 40);
+    });
+
+    // Keep update leaderboard and size display if needed
+    // updateLeaderboard();
+    updateSizeDisplay();
+
+    requestAnimationFrame(gameLoop);
+    return;  // skip rest of game logic
+  }
   const delta = (currentTime - lastFrameTime) / 1000;
   lastFrameTime = currentTime;
   const s = dots[clientId];
@@ -453,6 +505,8 @@ function checkAndRespawnPowerup() {
 
 function startStaleDotCleanup() {
   setInterval(() => {
+    if (gameEnded) return;
+
     const now = Date.now();
     for (const id in dotLastUpdated) {
       if (+id !== clientId && now - dotLastUpdated[id] > 5000) {
