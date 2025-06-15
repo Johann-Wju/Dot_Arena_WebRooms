@@ -8,7 +8,6 @@ const resetBtn = document.getElementById('reset-btn');
 const leaderboardList = document.getElementById('leaderboard-list');
 const sizeDisplay = document.getElementById('size-display');
 const messageDiv = document.getElementById('message');
-const powerupTimers = {}; // id: timeout ID
 
 const serverAddr = 'wss://nosch.uber.space/web-rooms/';
 const socket = new WebSocket(serverAddr);
@@ -26,11 +25,17 @@ let powerupMessage = '';
 let powerupMessageOpacity = 0;
 let powerupMessageHue = 0;
 let powerupMessageTimeout = null;
+let powerupTimerDisplay = 0;
 let powerupRemainingTime = 0;
 
-const snakes = {};              // { id: snakeObject }
-const food = [];                // Array of food objects
-const snakeLastUpdated = {};    // { id: timestamp }
+let lastSendTime = 0;
+const SEND_INTERVAL = 10; // milliseconds
+
+// Changed to Dots
+const dots = {};              // { id: dotObject }
+const food = [];   // Array of food objects
+// Changed to Dot
+const dotLastUpdated = {};    // { id: timestamp }
 
 // =========================
 // Initialization
@@ -46,7 +51,7 @@ canvas.addEventListener('touchmove', (e) => {
 });
 window.addEventListener('beforeunload', () => {
   if (socket.readyState === WebSocket.OPEN && clientId !== null) {
-    sendRequest('*set-data*', `snake-${clientId}`, null);
+    sendRequest('*set-data*', `dot-${clientId}`, null);
   }
 });
 
@@ -56,6 +61,14 @@ window.addEventListener('beforeunload', () => {
 function resizeCanvas() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
+}
+
+let foodUpdateTimeout;
+function delayedFoodSync() {
+  clearTimeout(foodUpdateTimeout);
+  foodUpdateTimeout = setTimeout(() => {
+    sendRequest('*set-data*', 'shared-food', food);
+  }, 100);
 }
 
 function getRandomBrightColor() {
@@ -69,12 +82,12 @@ function sendRequest(...msg) {
   socket.send(JSON.stringify(msg));
 }
 
-function subscribeSnakeKey(id) {
-  sendRequest('*subscribe-data*', `snake-${id}`);
+function subscribeDotKey(id) {
+  sendRequest('*subscribe-data*', `dot-${id}`);
 }
 
-function unsubscribeSnakeKey(id) {
-  sendRequest('*unsubscribe-data*', `snake-${id}`);
+function unsubscribeDotKey(id) {
+  sendRequest('*unsubscribe-data*', `dot-${id}`);
 }
 
 function showMessage(text, duration = 3000) {
@@ -87,29 +100,25 @@ function showMessage(text, duration = 3000) {
 }
 
 // =========================
-// Snake Management
+// Dot Management
 // =========================
-function createSnake() {
+function createDot() {
   const padding = 50;
   const x = padding + Math.random() * (canvas.width - 2 * padding);
   const y = padding + Math.random() * (canvas.height - 2 * padding);
-  // TODO 
-  // Bug when snakesize excedes 400-500 length. Weird behaviour of food spawning
-  // Probably a server High Ping problem
-  const body = Array.from({ length: 10 }, (_, i) => ({ x: x - i * 5, y }));
   return {
-    x, y, dx: 1, dy: 0, body, size: 10,
+    x, y, dx: 1, dy: 0, size: 10,
     color: getRandomBrightColor(),
     hasPowerup: false,
     rainbowPhase: 0
   };
 }
 
-function cleanupSnake(id) {
-  console.log(`[WS] Cleaning up snake #${id}`);
-  const hadPowerup = snakes[id]?.hasPowerup;
-  delete snakes[id];
-  unsubscribeSnakeKey(id);
+function cleanupDot(id) {
+  console.log(`[WS] Cleaning up dot #${id}`);
+  const hadPowerup = dots[id]?.hasPowerup;
+  delete dots[id];
+  unsubscribeDotKey(id);
   updateLeaderboard();
   draw();
 
@@ -120,12 +129,12 @@ function cleanupSnake(id) {
 
 function resetGame() {
   if (clientId !== 0) return console.warn('Only Player #1 can reset.');
-  const oldColor = snakes[clientId]?.color || getRandomBrightColor();
-  snakes[clientId] = createSnake();
-  snakes[clientId].color = oldColor;
+  const oldColor = dots[clientId]?.color || getRandomBrightColor();
+  dots[clientId] = createDot();
+  dots[clientId].color = oldColor;
   food.length = 0;
   spawnFood();
-  sendRequest('*set-data*', `snake-${clientId}`, snakes[clientId]);
+  sendRequest('*set-data*', `dot-${clientId}`, dots[clientId]);
   sendRequest('*set-data*', 'shared-food', food);
   updateInfo();
   draw();
@@ -158,7 +167,7 @@ function updateInfo() {
 
 function updateLeaderboard() {
   leaderboardList.innerHTML = '';
-  Object.entries(snakes)
+  Object.entries(dots)
     .sort(([, a], [, b]) => b.size - a.size)
     .slice(0, 5)
     .forEach(([id, s]) => {
@@ -169,7 +178,7 @@ function updateLeaderboard() {
 }
 
 function updateSizeDisplay() {
-  const s = snakes[clientId];
+  const s = dots[clientId];
   sizeDisplay.textContent = s ? `Size: ${s.size}` : '';
 }
 
@@ -177,7 +186,7 @@ function updateSizeDisplay() {
 // WebSocket Events
 // =========================
 socket.addEventListener('open', () => {
-  sendRequest('*enter-room*', 'snake-room');
+  sendRequest('*enter-room*', 'dot-arena-room');
   sendRequest('*subscribe-client-count*');
   sendRequest('*subscribe-client-entries*');
   sendRequest('*subscribe-data*', 'shared-food');
@@ -190,19 +199,25 @@ socket.addEventListener('message', ({ data }) => {
   const msg = JSON.parse(data);
   const [selector, payload] = msg;
 
-  if (selector.startsWith('snake-')) {
+  if (selector.startsWith('dot-')) {
     const id = +selector.split('-')[1];
     if (id !== clientId) {
       if (payload === null) {
-        delete snakes[id];
+        delete dots[id];
         updateLeaderboard();
         draw();
       } else {
-        snakes[id] = {
-          ...payload,
-          color: snakes[id]?.color || payload.color || getRandomBrightColor()
-        };
-        snakeLastUpdated[id] = Date.now();
+        const s = dots[id] || createDot();
+        s.x = payload.x;
+        s.y = payload.y;
+        s.dx = payload.dx;
+        s.dy = payload.dy;
+        s.size = payload.size;
+        s.hasPowerup = payload.hasPowerup;
+        if (payload.color) s.color = payload.color;
+
+        dots[id] = s;
+        dotLastUpdated[id] = Date.now();
       }
     }
     return;
@@ -211,12 +226,14 @@ socket.addEventListener('message', ({ data }) => {
   switch (selector) {
     case '*client-id*':
       clientId = payload;
-      snakes[clientId] = createSnake();
+      dots[clientId] = createDot();
       if (clientId !== 0) resetBtn.style.display = 'none';
       if (clientId === 0) {
         spawnFood();
-        startStaleSnakeCleanup();
-        setInterval(spawnFood, 500);
+        startStaleDotCleanup();
+        setInterval(() => {
+          if (food.length < 40) spawnFood();
+        }, 1000);
         checkAndRespawnPowerup();
       }
       updateInfo();
@@ -228,20 +245,20 @@ socket.addEventListener('message', ({ data }) => {
       clientCount = payload;
       updateInfo();
       for (let i = 0; i < clientCount; i++) {
-        if (!snakes[i]) subscribeSnakeKey(i);
+        if (!dots[i]) subscribeDotKey(i);
       }
-      subscribeSnakeKey(clientId);
+      subscribeDotKey(clientId);
       break;
 
     case '*client-enter*':
       clientCount++;
       updateInfo();
-      if (payload !== clientId) subscribeSnakeKey(payload);
+      if (payload !== clientId) subscribeDotKey(payload);
       break;
 
     case '*client-exit*':
       clientCount--;
-      cleanupSnake(payload);
+      cleanupDot(payload);
       updateInfo();
       break;
 
@@ -258,9 +275,9 @@ socket.addEventListener('message', ({ data }) => {
 
 socket.addEventListener('close', () => {
   infoDisplay.textContent = 'Disconnected';
-  if (snakes[clientId]) {
-    delete snakes[clientId];
-    unsubscribeSnakeKey(clientId);
+  if (dots[clientId]) {
+    delete dots[clientId];
+    unsubscribeDotKey(clientId);
     updateLeaderboard();
     draw();
   }
@@ -269,8 +286,11 @@ socket.addEventListener('close', () => {
 // =========================
 // Game Loop & Cleanup
 // =========================
-function gameLoop() {
-  const s = snakes[clientId];
+let lastFrameTime = performance.now();
+function gameLoop(currentTime) {
+  const delta = (currentTime - lastFrameTime) / 1000;
+  lastFrameTime = currentTime;
+  const s = dots[clientId];
   if (!s) return requestAnimationFrame(gameLoop);
 
   if (targetPosition) {
@@ -287,54 +307,81 @@ function gameLoop() {
   const speed = s.hasPowerup ? baseSpeed * 1.5 : baseSpeed;
   s.x = Math.max(0, Math.min(canvas.width, s.x + s.dx * speed));
   s.y = Math.max(0, Math.min(canvas.height, s.y + s.dy * speed));
-  s.body.unshift({ x: s.x, y: s.y });
-  if (s.body.length > s.size) s.body.pop();
 
   let ate = false;
   for (let i = food.length - 1; i >= 0; i--) {
     if (Math.hypot(s.x - food[i].x, s.y - food[i].y) < 10) {
-      s.size += 2;
+      s.size += 2
       food.splice(i, 1);
       ate = true;
     }
   }
 
-  if (ate) sendRequest('*set-data*', 'shared-food', food);
-  sendRequest('*set-data*', `snake-${clientId}`, s);
+  if (ate) delayedFoodSync();
+  const now = Date.now();
+  if (now - lastSendTime > SEND_INTERVAL) {
+    lastSendTime = now;
+    sendRequest('*set-data*', `dot-${clientId}`, {
+      x: s.x,
+      y: s.y,
+      dx: s.dx,
+      dy: s.dy,
+      size: s.size,
+      hasPowerup: s.hasPowerup,
+      color: s.color
+    });
+  }
 
-  if (powerup && Math.hypot(s.x - powerup.x, s.y - powerup.y) < 10) {
+  if (powerup && Math.hypot(s.x - powerup.x, s.y - powerup.y) < 15 && !s.hasPowerup) {
     s.hasPowerup = true;
     powerup = null;
-    sendRequest('*set-data*', 'shared-powerup', null);
-
-    if (powerupTimers[clientId]) clearTimeout(powerupTimers[clientId]);
-    powerupTimers[clientId] = setTimeout(() => {
-      snakes[clientId].hasPowerup = false;
-
-      const fadeDuration = 500;
-      const fadeSteps = 30;
-      let step = 0;
-      const fadeInterval = setInterval(() => {
-        step++;
-        powerupMessageOpacity = Math.max(0, 1 - step / fadeSteps);
-        if (step >= fadeSteps) clearInterval(fadeInterval);
-      }, fadeDuration / fadeSteps);
-
-      checkAndRespawnPowerup(); // <-- Trigger next spawn check
-    }, 10000);
+    powerupRemainingTime = 10; // seconds
 
     powerupMessage = 'Powered Up!';
     powerupMessageOpacity = 1;
     powerupMessageHue = 0;
 
-    powerupRemainingTime = 25; // Initialize 10 seconds timer here
+    sendRequest('*set-data*', 'shared-powerup', null);
+    sendRequest('*set-data*', `dot-${clientId}`, {
+      x: s.x,
+      y: s.y,
+      dx: s.dx,
+      dy: s.dy,
+      size: s.size,
+      hasPowerup: true,
+      color: s.color
+    });
   }
 
-  if (s.hasPowerup && powerupRemainingTime > 0) {
-    powerupRemainingTime -= 1 / 60; // assuming 60fps
-    if (powerupRemainingTime < 0) powerupRemainingTime = 0;
-  } else {
-    powerupRemainingTime = 0;
+  if (s.hasPowerup) {
+    powerupRemainingTime -= delta;
+    if (powerupRemainingTime > 0) {
+      powerupTimerDisplay = powerupRemainingTime; // update the displayed timer
+    } else {
+      powerupRemainingTime = 0;
+      // powerup ended
+      powerupTimerDisplay = 0; // will be set during fade below
+
+      s.hasPowerup = false;
+      // rest of powerup expiration code ...
+
+      // Start fade
+      const fadeDuration = 500;
+      const fadeSteps = 30;
+      let step = 0;
+      powerupTimerDisplay = 0.0; // reset or keep last value
+      const fadeInterval = setInterval(() => {
+        step++;
+        powerupMessageOpacity = Math.max(0, 1 - step / fadeSteps);
+
+        // During fade, show timer as 0.0 or last frame
+        powerupTimerDisplay = 0;
+
+        if (step >= fadeSteps) clearInterval(fadeInterval);
+      }, fadeDuration / fadeSteps);
+
+      checkAndRespawnPowerup();
+    }
   }
 
   draw();
@@ -346,12 +393,12 @@ function gameLoop() {
 function checkAndRespawnPowerup() {
   if (clientId !== 0) return; // Only host manages powerups
 
-  const anyonePoweredUp = Object.values(snakes).some(s => s.hasPowerup);
+  const anyonePoweredUp = Object.values(dots).some(s => s.hasPowerup);
 
   if (!anyonePoweredUp && !powerup) {
     setTimeout(() => {
       // Double-check no one gained powerup during the wait
-      const stillNone = Object.values(snakes).every(s => !s.hasPowerup);
+      const stillNone = Object.values(dots).every(s => !s.hasPowerup);
       if (!powerup && stillNone) {
         const padding = 10;
         powerup = {
@@ -364,14 +411,14 @@ function checkAndRespawnPowerup() {
   }
 }
 
-function startStaleSnakeCleanup() {
+function startStaleDotCleanup() {
   setInterval(() => {
     const now = Date.now();
-    for (const id in snakeLastUpdated) {
-      if (+id !== clientId && now - snakeLastUpdated[id] > 5000) {
-        delete snakes[id];
-        delete snakeLastUpdated[id];
-        sendRequest('*set-data*', `snake-${id}`, null);
+    for (const id in dotLastUpdated) {
+      if (+id !== clientId && now - dotLastUpdated[id] > 5000) {
+        delete dots[id];
+        delete dotLastUpdated[id];
+        sendRequest('*set-data*', `dot-${id}`, null);
         updateLeaderboard();
         draw();
       }
@@ -415,8 +462,8 @@ function draw() {
     ctx.stroke();
   }
 
-  for (const id in snakes) {
-    const s = snakes[id];
+  for (const id in dots) {
+    const s = dots[id];
 
     if (s.hasPowerup) {
       // Cycle hue for rainbow effect
@@ -426,17 +473,17 @@ function draw() {
       ctx.fillStyle = s.color;
     }
 
-    s.body.forEach(({ x, y }) => {
-      ctx.beginPath();
-      ctx.arc(x, y, 5, 0, Math.PI * 2);
-      ctx.fill();
-    });
+    ctx.beginPath();
+    // Dot draw
+    ctx.arc(s.x, s.y, 8, 0, Math.PI * 2);
+    ctx.fill();
 
-    const head = s.body[0];
     ctx.fillStyle = 'white';
     ctx.font = '14px Arial';
     ctx.textAlign = 'center';
-    ctx.fillText(`#${+id + 1}`, head.x, head.y - 10);
+
+    // Draw client number and size score
+    ctx.fillText(`#${+id + 1}: ${Math.floor(s.size)}`, s.x, s.y - 10);
   }
 
   if (powerupMessageOpacity > 0) {
@@ -450,10 +497,10 @@ function draw() {
     ctx.shadowBlur = 8;
     ctx.fillText(powerupMessage, canvas.width / 2, canvas.height / 2);
 
-    // NEW: Draw timer below
-    if (powerupRemainingTime > 0) {
+    // Draw timer while fading (if opacity > 0)
+    if (powerupTimerDisplay > 0 || powerupMessageOpacity > 0) {
       ctx.font = '32px Arial';
-      ctx.fillText(powerupRemainingTime.toFixed(1) + 's', canvas.width / 2, canvas.height / 2 + 60);
+      ctx.fillText(powerupTimerDisplay.toFixed(1) + 's', canvas.width / 2, canvas.height / 2 + 60);
     }
 
     ctx.restore();

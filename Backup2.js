@@ -8,7 +8,6 @@ const resetBtn = document.getElementById('reset-btn');
 const leaderboardList = document.getElementById('leaderboard-list');
 const sizeDisplay = document.getElementById('size-display');
 const messageDiv = document.getElementById('message');
-const powerupTimers = {}; // id: timeout ID
 
 const serverAddr = 'wss://nosch.uber.space/web-rooms/';
 const socket = new WebSocket(serverAddr);
@@ -26,6 +25,7 @@ let powerupMessage = '';
 let powerupMessageOpacity = 0;
 let powerupMessageHue = 0;
 let powerupMessageTimeout = null;
+let powerupTimerDisplay = 0;
 let powerupRemainingTime = 0;
 
 let lastSendTime = 0;
@@ -217,7 +217,6 @@ socket.addEventListener('message', ({ data }) => {
         if (payload.color) s.color = payload.color;
 
         dots[id] = s;
-        dotLastUpdated[id] = Date.now();;
         dotLastUpdated[id] = Date.now();
       }
     }
@@ -287,7 +286,10 @@ socket.addEventListener('close', () => {
 // =========================
 // Game Loop & Cleanup
 // =========================
-function gameLoop() {
+let lastFrameTime = performance.now();
+function gameLoop(currentTime) {
+  const delta = (currentTime - lastFrameTime) / 1000;
+  lastFrameTime = currentTime;
   const s = dots[clientId];
   if (!s) return requestAnimationFrame(gameLoop);
 
@@ -309,7 +311,7 @@ function gameLoop() {
   let ate = false;
   for (let i = food.length - 1; i >= 0; i--) {
     if (Math.hypot(s.x - food[i].x, s.y - food[i].y) < 10) {
-      s.size += 2;
+      s.size += 2
       food.splice(i, 1);
       ate = true;
     }
@@ -326,43 +328,60 @@ function gameLoop() {
       dy: s.dy,
       size: s.size,
       hasPowerup: s.hasPowerup,
-      color: s.color, // include so other clients can retain correct color
+      color: s.color
     });
   }
 
-  if (powerup && Math.hypot(s.x - powerup.x, s.y - powerup.y) < 10) {
+  if (powerup && Math.hypot(s.x - powerup.x, s.y - powerup.y) < 15 && !s.hasPowerup) {
     s.hasPowerup = true;
     powerup = null;
-    sendRequest('*set-data*', 'shared-powerup', null);
-
-    if (powerupTimers[clientId]) clearTimeout(powerupTimers[clientId]);
-    powerupTimers[clientId] = setTimeout(() => {
-      dots[clientId].hasPowerup = false;
-
-      const fadeDuration = 500;
-      const fadeSteps = 30;
-      let step = 0;
-      const fadeInterval = setInterval(() => {
-        step++;
-        powerupMessageOpacity = Math.max(0, 1 - step / fadeSteps);
-        if (step >= fadeSteps) clearInterval(fadeInterval);
-      }, fadeDuration / fadeSteps);
-
-      checkAndRespawnPowerup(); // <-- Trigger next spawn check
-    }, 10000);
+    powerupRemainingTime = 10; // seconds
 
     powerupMessage = 'Powered Up!';
     powerupMessageOpacity = 1;
     powerupMessageHue = 0;
 
-    powerupRemainingTime = 25; // Initialize 10 seconds timer here
+    sendRequest('*set-data*', 'shared-powerup', null);
+    sendRequest('*set-data*', `dot-${clientId}`, {
+      x: s.x,
+      y: s.y,
+      dx: s.dx,
+      dy: s.dy,
+      size: s.size,
+      hasPowerup: true,
+      color: s.color
+    });
   }
 
-  if (s.hasPowerup && powerupRemainingTime > 0) {
-    powerupRemainingTime -= 1 / 60; // assuming 60fps
-    if (powerupRemainingTime < 0) powerupRemainingTime = 0;
-  } else {
-    powerupRemainingTime = 0;
+  if (s.hasPowerup) {
+    powerupRemainingTime -= delta;
+    if (powerupRemainingTime > 0) {
+      powerupTimerDisplay = powerupRemainingTime; // update the displayed timer
+    } else {
+      powerupRemainingTime = 0;
+      // powerup ended
+      powerupTimerDisplay = 0; // will be set during fade below
+
+      s.hasPowerup = false;
+      // rest of powerup expiration code ...
+
+      // Start fade
+      const fadeDuration = 500;
+      const fadeSteps = 30;
+      let step = 0;
+      powerupTimerDisplay = 0.0; // reset or keep last value
+      const fadeInterval = setInterval(() => {
+        step++;
+        powerupMessageOpacity = Math.max(0, 1 - step / fadeSteps);
+
+        // During fade, show timer as 0.0 or last frame
+        powerupTimerDisplay = 0;
+
+        if (step >= fadeSteps) clearInterval(fadeInterval);
+      }, fadeDuration / fadeSteps);
+
+      checkAndRespawnPowerup();
+    }
   }
 
   draw();
@@ -462,7 +481,9 @@ function draw() {
     ctx.fillStyle = 'white';
     ctx.font = '14px Arial';
     ctx.textAlign = 'center';
-    ctx.fillText(`#${+id + 1}`, s.x, s.y - 10);
+
+    // Draw client number and size score
+    ctx.fillText(`#${+id + 1}: ${Math.floor(s.size)}`, s.x, s.y - 10);
   }
 
   if (powerupMessageOpacity > 0) {
@@ -476,10 +497,10 @@ function draw() {
     ctx.shadowBlur = 8;
     ctx.fillText(powerupMessage, canvas.width / 2, canvas.height / 2);
 
-    // NEW: Draw timer below
-    if (powerupRemainingTime > 0) {
+    // Draw timer while fading (if opacity > 0)
+    if (powerupTimerDisplay > 0 || powerupMessageOpacity > 0) {
       ctx.font = '32px Arial';
-      ctx.fillText(powerupRemainingTime.toFixed(1) + 's', canvas.width / 2, canvas.height / 2 + 60);
+      ctx.fillText(powerupTimerDisplay.toFixed(1) + 's', canvas.width / 2, canvas.height / 2 + 60);
     }
 
     ctx.restore();
