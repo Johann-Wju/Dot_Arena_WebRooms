@@ -14,6 +14,7 @@ const serverAddr = 'wss://nosch.uber.space/web-rooms/';
 const socket = new WebSocket(serverAddr);
 
 const DotDrawSize = 10;
+const gameOverClients = new Set();
 
 // =========================
 // Game State
@@ -32,7 +33,7 @@ let powerupTimerDisplay = 0;
 let powerupRemainingTime = 0;
 
 let lastSendTime = 0;
-const SEND_INTERVAL = 10; // milliseconds
+const SEND_INTERVAL = 30; // milliseconds
 
 // Changed to Dots
 const dots = {};              // { id: dotObject }
@@ -113,8 +114,7 @@ function createDot() {
     x, y, dx: 1, dy: 0, size: 10,
     color: getRandomBrightColor(),
     hasPowerup: false,
-    rainbowPhase: 0,
-    alive: true
+    rainbowPhase: 0
   };
 }
 
@@ -132,7 +132,7 @@ function cleanupDot(id) {
 }
 
 function resetGame() {
-  if (clientId !== 0 || (dots[clientId] && !dots[clientId].alive)) return console.warn('Cannot reset.');
+  if (clientId !== 0) return console.warn('Only Player #1 can reset.');
   const oldColor = dots[clientId]?.color || getRandomBrightColor();
   dots[clientId] = createDot();
   dots[clientId].color = oldColor;
@@ -203,28 +203,41 @@ socket.addEventListener('message', ({ data }) => {
   const msg = JSON.parse(data);
   const [selector, payload] = msg;
 
-  if (selector.startsWith('dot-')) {
-    const id = +selector.split('-')[1];
+  if (selector === 'game-over' && payload === 'game-over') {
+    gameOverClients.add(clientId);
 
-    if (payload === null) {
-      delete dots[id];
-      updateLeaderboard();
-      draw();
-    } else {
-      const s = dots[id] || createDot();
-      s.x = payload.x;
-      s.y = payload.y;
-      s.dx = payload.dx;
-      s.dy = payload.dy;
-      s.size = payload.size;
-      s.hasPowerup = payload.hasPowerup;
-      s.alive = payload.alive !== false;
-      if (payload.color) s.color = payload.color;
-
-      dots[id] = s;
-      dotLastUpdated[id] = Date.now();
+    // Cleanup own dot and unsubscribe from own dot data
+    if (dots[clientId]) {
+      delete dots[clientId];
+      unsubscribeDotKey(clientId);
     }
 
+    updateLeaderboard();
+    showMessage('You got eaten! GAME OVER', 5000);
+    draw();
+  }
+
+  if (selector.startsWith('dot-')) {
+    const id = +selector.split('-')[1];
+    if (id !== clientId) {
+      if (payload === null) {
+        delete dots[id];
+        updateLeaderboard();
+        draw();
+      } else {
+        const s = dots[id] || createDot();
+        s.x = payload.x;
+        s.y = payload.y;
+        s.dx = payload.dx;
+        s.dy = payload.dy;
+        s.size = payload.size;
+        s.hasPowerup = payload.hasPowerup;
+        if (payload.color) s.color = payload.color;
+
+        dots[id] = s;
+        dotLastUpdated[id] = Date.now();
+      }
+    }
     return;
   }
 
@@ -244,6 +257,17 @@ socket.addEventListener('message', ({ data }) => {
       updateInfo();
       showMessage(`You joined as Player #${clientId + 1}`);
       draw();
+      break;
+
+    case 'game-over':
+      if (payload === 'game-over') {
+        gameOverClients.add(clientId);
+        delete dots[clientId];
+        unsubscribeDotKey(clientId);
+        updateLeaderboard();
+        showMessage('You got eaten! GAME OVER', 5000);
+        draw();
+      }
       break;
 
     case '*client-count*':
@@ -293,13 +317,9 @@ socket.addEventListener('close', () => {
 // =========================
 let lastFrameTime = performance.now();
 function gameLoop(currentTime) {
-  const s = dots[clientId];
-  if (!s.alive) {
-    draw(); // Still render
-    return requestAnimationFrame(gameLoop);
-  }
   const delta = (currentTime - lastFrameTime) / 1000;
   lastFrameTime = currentTime;
+  const s = dots[clientId];
   if (!s) return requestAnimationFrame(gameLoop);
 
   if (targetPosition) {
@@ -327,40 +347,9 @@ function gameLoop(currentTime) {
     }
   }
 
-  if (s.hasPowerup && s.alive) {
-    for (const [otherId, other] of Object.entries(dots)) {
-      if (otherId == clientId || !other.alive) continue;
-
-      const dist = Math.hypot(s.x - other.x, s.y - other.y);
-      if (dist < DotDrawSize * 2) {
-        // Eat them!
-        s.size += other.size;
-
-        // Mark them dead
-        other.alive = false;
-        other.hasPowerup = false;
-
-        if (otherId == clientId) {
-          // You got eaten!
-          showMessage('GAME OVER', 999999); // Forever
-        }
-
-        // Send death to server
-        sendRequest('*set-data*', `dot-${otherId}`, {
-          ...other,
-          alive: false,
-          hasPowerup: false
-        });
-
-        // If you're host, trigger powerup respawn
-        if (clientId === 0) checkAndRespawnPowerup();
-      }
-    }
-  }
-
   if (ate) delayedFoodSync();
   const now = Date.now();
-  if (s.alive && now - lastSendTime > SEND_INTERVAL) {
+  if (now - lastSendTime > SEND_INTERVAL) {
     lastSendTime = now;
     sendRequest('*set-data*', `dot-${clientId}`, {
       x: s.x,
@@ -369,8 +358,7 @@ function gameLoop(currentTime) {
       dy: s.dy,
       size: s.size,
       hasPowerup: s.hasPowerup,
-      color: s.color,
-      alive: s.alive
+      color: s.color
     });
   }
   const powerupRadius = 8;
@@ -428,6 +416,46 @@ function gameLoop(currentTime) {
       checkAndRespawnPowerup();
     }
   }
+
+  if (s.hasPowerup && !gameOverClients.has(clientId)) {
+    // Check collision with other dots to eat
+    for (const otherId in dots) {
+      if (otherId == clientId) continue;
+      const otherDot = dots[otherId];
+      if (gameOverClients.has(+otherId)) continue; // ignore dead players
+
+      const dist = Math.hypot(s.x - otherDot.x, s.y - otherDot.y);
+      if (dist < DotDrawSize * 2) {
+        // Eat the other dot
+        s.size += otherDot.size;
+
+        // Remove the eaten dot for everyone
+        sendRequest('*set-data*', `dot-${otherId}`, null);
+        unsubscribeDotKey(+otherId);
+        delete dots[otherId];
+
+        // Notify the eaten client that they lost
+        if (+otherId === clientId) {
+          gameOverClients.add(clientId); // Mark self as game over immediately
+        } else {
+          sendRequest('*send-to-client*', +otherId, 'game-over');
+        }
+
+        updateLeaderboard();
+        draw();
+      }
+    }
+  }
+
+  if (gameOverClients.has(clientId)) {
+    // Skip game logic for this player (spectator mode)
+    draw();
+    updateLeaderboard();
+    updateSizeDisplay();
+    requestAnimationFrame(gameLoop);
+    return;
+  }
+
 
   draw();
   updateLeaderboard();
@@ -508,6 +536,20 @@ function draw() {
     ctx.fill();
   });
 
+  if (gameOverClients.has(clientId)) {
+    // Draw game over screen for current player
+    ctx.fillStyle = 'rgba(0,0,0,0.8)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.font = '72px Arial';
+    ctx.fillStyle = 'red';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2);
+
+    return; // Skip drawing dots & food for this player
+  }
+
   if (powerup) {
     ctx.save();
 
@@ -577,19 +619,6 @@ function draw() {
 
     ctx.restore();
   }
-
-  const me = dots[clientId];
-  if (me && !me.alive) {
-    ctx.save();
-    ctx.font = '64px Arial';
-    ctx.fillStyle = 'red';
-    ctx.textAlign = 'center';
-    ctx.shadowColor = 'black';
-    ctx.shadowBlur = 10;
-    ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2);
-    ctx.restore();
-  }
-
 }
 
 requestAnimationFrame(gameLoop);

@@ -32,7 +32,7 @@ let powerupTimerDisplay = 0;
 let powerupRemainingTime = 0;
 
 let lastSendTime = 0;
-const SEND_INTERVAL = 10; // milliseconds
+const SEND_INTERVAL = 20; // milliseconds
 
 // Changed to Dots
 const dots = {};              // { id: dotObject }
