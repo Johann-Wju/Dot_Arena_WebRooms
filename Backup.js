@@ -1,3 +1,4 @@
+// BROKEN VERSION
 // =========================
 // Constants & DOM Elements
 // =========================
@@ -11,6 +12,8 @@ const messageDiv = document.getElementById('message');
 
 const serverAddr = 'wss://nosch.uber.space/web-rooms/';
 const socket = new WebSocket(serverAddr);
+
+const DotDrawSize = 10;
 
 // =========================
 // Game State
@@ -110,7 +113,8 @@ function createDot() {
     x, y, dx: 1, dy: 0, size: 10,
     color: getRandomBrightColor(),
     hasPowerup: false,
-    rainbowPhase: 0
+    rainbowPhase: 0,
+    alive: true
   };
 }
 
@@ -128,7 +132,7 @@ function cleanupDot(id) {
 }
 
 function resetGame() {
-  if (clientId !== 0) return console.warn('Only Player #1 can reset.');
+  if (clientId !== 0 || (dots[clientId] && !dots[clientId].alive)) return console.warn('Cannot reset.');
   const oldColor = dots[clientId]?.color || getRandomBrightColor();
   dots[clientId] = createDot();
   dots[clientId].color = oldColor;
@@ -201,25 +205,26 @@ socket.addEventListener('message', ({ data }) => {
 
   if (selector.startsWith('dot-')) {
     const id = +selector.split('-')[1];
-    if (id !== clientId) {
-      if (payload === null) {
-        delete dots[id];
-        updateLeaderboard();
-        draw();
-      } else {
-        const s = dots[id] || createDot();
-        s.x = payload.x;
-        s.y = payload.y;
-        s.dx = payload.dx;
-        s.dy = payload.dy;
-        s.size = payload.size;
-        s.hasPowerup = payload.hasPowerup;
-        if (payload.color) s.color = payload.color;
 
-        dots[id] = s;
-        dotLastUpdated[id] = Date.now();
-      }
+    if (payload === null) {
+      delete dots[id];
+      updateLeaderboard();
+      draw();
+    } else {
+      const s = dots[id] || createDot();
+      s.x = payload.x;
+      s.y = payload.y;
+      s.dx = payload.dx;
+      s.dy = payload.dy;
+      s.size = payload.size;
+      s.hasPowerup = payload.hasPowerup;
+      s.alive = payload.alive !== false;
+      if (payload.color) s.color = payload.color;
+
+      dots[id] = s;
+      dotLastUpdated[id] = Date.now();
     }
+
     return;
   }
 
@@ -288,9 +293,13 @@ socket.addEventListener('close', () => {
 // =========================
 let lastFrameTime = performance.now();
 function gameLoop(currentTime) {
+  const s = dots[clientId];
+  if (!s.alive) {
+    draw(); // Still render
+    return requestAnimationFrame(gameLoop);
+  }
   const delta = (currentTime - lastFrameTime) / 1000;
   lastFrameTime = currentTime;
-  const s = dots[clientId];
   if (!s) return requestAnimationFrame(gameLoop);
 
   if (targetPosition) {
@@ -310,16 +319,48 @@ function gameLoop(currentTime) {
 
   let ate = false;
   for (let i = food.length - 1; i >= 0; i--) {
-    if (Math.hypot(s.x - food[i].x, s.y - food[i].y) < 10) {
+    const foodRadius = 6;
+    if (Math.hypot(s.x - food[i].x, s.y - food[i].y) < DotDrawSize + foodRadius) {
       s.size += 2
       food.splice(i, 1);
       ate = true;
     }
   }
 
+  if (s.hasPowerup && s.alive) {
+    for (const [otherId, other] of Object.entries(dots)) {
+      if (otherId == clientId || !other.alive) continue;
+
+      const dist = Math.hypot(s.x - other.x, s.y - other.y);
+      if (dist < DotDrawSize * 2) {
+        // Eat them!
+        s.size += other.size;
+
+        // Mark them dead
+        other.alive = false;
+        other.hasPowerup = false;
+
+        if (otherId == clientId) {
+          // You got eaten!
+          showMessage('GAME OVER', 999999); // Forever
+        }
+
+        // Send death to server
+        sendRequest('*set-data*', `dot-${otherId}`, {
+          ...other,
+          alive: false,
+          hasPowerup: false
+        });
+
+        // If you're host, trigger powerup respawn
+        if (clientId === 0) checkAndRespawnPowerup();
+      }
+    }
+  }
+
   if (ate) delayedFoodSync();
   const now = Date.now();
-  if (now - lastSendTime > SEND_INTERVAL) {
+  if (s.alive && now - lastSendTime > SEND_INTERVAL) {
     lastSendTime = now;
     sendRequest('*set-data*', `dot-${clientId}`, {
       x: s.x,
@@ -328,11 +369,15 @@ function gameLoop(currentTime) {
       dy: s.dy,
       size: s.size,
       hasPowerup: s.hasPowerup,
-      color: s.color
+      color: s.color,
+      alive: s.alive
     });
   }
-
-  if (powerup && Math.hypot(s.x - powerup.x, s.y - powerup.y) < 15 && !s.hasPowerup) {
+  const powerupRadius = 8;
+  if (
+    powerup &&
+    Math.hypot(s.x - powerup.x, s.y - powerup.y) < DotDrawSize + powerupRadius &&
+    !s.hasPowerup) {
     s.hasPowerup = true;
     powerup = null;
     powerupRemainingTime = 10; // seconds
@@ -429,6 +474,29 @@ function startStaleDotCleanup() {
 // =========================
 // Rendering
 // =========================
+function drawStar(ctx, cx, cy, spikes, outerRadius, innerRadius) {
+  let rot = Math.PI / 2 * 3;
+  let x = cx;
+  let y = cy;
+  const step = Math.PI / spikes;
+
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - outerRadius);
+  for (let i = 0; i < spikes; i++) {
+    x = cx + Math.cos(rot) * outerRadius;
+    y = cy + Math.sin(rot) * outerRadius;
+    ctx.lineTo(x, y);
+    rot += step;
+
+    x = cx + Math.cos(rot) * innerRadius;
+    y = cy + Math.sin(rot) * innerRadius;
+    ctx.lineTo(x, y);
+    rot += step;
+  }
+  ctx.lineTo(cx, cy - outerRadius);
+  ctx.closePath();
+}
+
 function draw() {
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -441,25 +509,29 @@ function draw() {
   });
 
   if (powerup) {
+    ctx.save();
+
     // Outer glow
     const gradient = ctx.createRadialGradient(
       powerup.x, powerup.y, 0,
-      powerup.x, powerup.y, 20
+      powerup.x, powerup.y, 30
     );
-    gradient.addColorStop(0, 'rgba(255, 215, 0, 0.6)'); // Bright gold center
-    gradient.addColorStop(1, 'rgba(255, 215, 0, 0)');   // Transparent outer
-
-    ctx.beginPath();
+    gradient.addColorStop(0, 'rgba(255, 215, 0, 0.6)');
+    gradient.addColorStop(1, 'rgba(255, 215, 0, 0)');
     ctx.fillStyle = gradient;
-    ctx.arc(powerup.x, powerup.y, 20, 0, Math.PI * 2);
+    ctx.beginPath();
+    ctx.arc(powerup.x, powerup.y, 30, 0, Math.PI * 2);
     ctx.fill();
 
-    // Main circle with stroke
-    ctx.beginPath();
-    ctx.strokeStyle = 'gold';
-    ctx.lineWidth = 3;
-    ctx.arc(powerup.x, powerup.y, 8, 0, Math.PI * 2);
+    // Draw star
+    drawStar(ctx, powerup.x, powerup.y, 5, 12, 6);
+    ctx.fillStyle = 'gold';
+    ctx.strokeStyle = 'orange';
+    ctx.lineWidth = 2;
+    ctx.fill();
     ctx.stroke();
+
+    ctx.restore();
   }
 
   for (const id in dots) {
@@ -475,7 +547,7 @@ function draw() {
 
     ctx.beginPath();
     // Dot draw
-    ctx.arc(s.x, s.y, 8, 0, Math.PI * 2);
+    ctx.arc(s.x, s.y, DotDrawSize, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.fillStyle = 'white';
@@ -505,6 +577,19 @@ function draw() {
 
     ctx.restore();
   }
+
+  const me = dots[clientId];
+  if (me && !me.alive) {
+    ctx.save();
+    ctx.font = '64px Arial';
+    ctx.fillStyle = 'red';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = 'black';
+    ctx.shadowBlur = 10;
+    ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2);
+    ctx.restore();
+  }
+
 }
 
 requestAnimationFrame(gameLoop);

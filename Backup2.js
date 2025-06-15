@@ -1,3 +1,4 @@
+// LAST STABLE VERSION
 // =========================
 // Constants & DOM Elements
 // =========================
@@ -11,6 +12,8 @@ const messageDiv = document.getElementById('message');
 
 const serverAddr = 'wss://nosch.uber.space/web-rooms/';
 const socket = new WebSocket(serverAddr);
+
+const DotDrawSize = 10;
 
 // =========================
 // Game State
@@ -310,7 +313,8 @@ function gameLoop(currentTime) {
 
   let ate = false;
   for (let i = food.length - 1; i >= 0; i--) {
-    if (Math.hypot(s.x - food[i].x, s.y - food[i].y) < 10) {
+    const foodRadius = 6;
+    if (Math.hypot(s.x - food[i].x, s.y - food[i].y) < DotDrawSize + foodRadius) {
       s.size += 2
       food.splice(i, 1);
       ate = true;
@@ -331,8 +335,11 @@ function gameLoop(currentTime) {
       color: s.color
     });
   }
-
-  if (powerup && Math.hypot(s.x - powerup.x, s.y - powerup.y) < 15 && !s.hasPowerup) {
+  const powerupRadius = 8;
+  if (
+    powerup &&
+    Math.hypot(s.x - powerup.x, s.y - powerup.y) < DotDrawSize + powerupRadius &&
+    !s.hasPowerup) {
     s.hasPowerup = true;
     powerup = null;
     powerupRemainingTime = 10; // seconds
@@ -429,6 +436,29 @@ function startStaleDotCleanup() {
 // =========================
 // Rendering
 // =========================
+function drawStar(ctx, cx, cy, spikes, outerRadius, innerRadius) {
+  let rot = Math.PI / 2 * 3;
+  let x = cx;
+  let y = cy;
+  const step = Math.PI / spikes;
+
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - outerRadius);
+  for (let i = 0; i < spikes; i++) {
+    x = cx + Math.cos(rot) * outerRadius;
+    y = cy + Math.sin(rot) * outerRadius;
+    ctx.lineTo(x, y);
+    rot += step;
+
+    x = cx + Math.cos(rot) * innerRadius;
+    y = cy + Math.sin(rot) * innerRadius;
+    ctx.lineTo(x, y);
+    rot += step;
+  }
+  ctx.lineTo(cx, cy - outerRadius);
+  ctx.closePath();
+}
+
 function draw() {
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -441,25 +471,29 @@ function draw() {
   });
 
   if (powerup) {
+    ctx.save();
+
     // Outer glow
     const gradient = ctx.createRadialGradient(
       powerup.x, powerup.y, 0,
-      powerup.x, powerup.y, 20
+      powerup.x, powerup.y, 30
     );
-    gradient.addColorStop(0, 'rgba(255, 215, 0, 0.6)'); // Bright gold center
-    gradient.addColorStop(1, 'rgba(255, 215, 0, 0)');   // Transparent outer
-
-    ctx.beginPath();
+    gradient.addColorStop(0, 'rgba(255, 215, 0, 0.6)');
+    gradient.addColorStop(1, 'rgba(255, 215, 0, 0)');
     ctx.fillStyle = gradient;
-    ctx.arc(powerup.x, powerup.y, 20, 0, Math.PI * 2);
+    ctx.beginPath();
+    ctx.arc(powerup.x, powerup.y, 30, 0, Math.PI * 2);
     ctx.fill();
 
-    // Main circle with stroke
-    ctx.beginPath();
-    ctx.strokeStyle = 'gold';
-    ctx.lineWidth = 3;
-    ctx.arc(powerup.x, powerup.y, 8, 0, Math.PI * 2);
+    // Draw star
+    drawStar(ctx, powerup.x, powerup.y, 5, 12, 6);
+    ctx.fillStyle = 'gold';
+    ctx.strokeStyle = 'orange';
+    ctx.lineWidth = 2;
+    ctx.fill();
     ctx.stroke();
+
+    ctx.restore();
   }
 
   for (const id in dots) {
@@ -475,7 +509,7 @@ function draw() {
 
     ctx.beginPath();
     // Dot draw
-    ctx.arc(s.x, s.y, 8, 0, Math.PI * 2);
+    ctx.arc(s.x, s.y, DotDrawSize, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.fillStyle = 'white';
