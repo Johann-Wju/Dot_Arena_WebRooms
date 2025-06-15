@@ -29,11 +29,13 @@ let powerupMessageTimeout = null;
 let powerupRemainingTime = 0;
 
 let lastSendTime = 0;
-const SEND_INTERVAL = 50; // milliseconds (i.e., 10 times per second)
+const SEND_INTERVAL = 10; // milliseconds
 
-const snakes = {};              // { id: snakeObject }
-const food = [];                // Array of food objects
-const snakeLastUpdated = {};    // { id: timestamp }
+// Changed to Dots
+const dots = {};              // { id: dotObject }
+const food = [];   // Array of food objects
+// Changed to Dot
+const dotLastUpdated = {};    // { id: timestamp }
 
 // =========================
 // Initialization
@@ -49,7 +51,7 @@ canvas.addEventListener('touchmove', (e) => {
 });
 window.addEventListener('beforeunload', () => {
   if (socket.readyState === WebSocket.OPEN && clientId !== null) {
-    sendRequest('*set-data*', `snake-${clientId}`, null);
+    sendRequest('*set-data*', `dot-${clientId}`, null);
   }
 });
 
@@ -80,12 +82,12 @@ function sendRequest(...msg) {
   socket.send(JSON.stringify(msg));
 }
 
-function subscribeSnakeKey(id) {
-  sendRequest('*subscribe-data*', `snake-${id}`);
+function subscribeDotKey(id) {
+  sendRequest('*subscribe-data*', `dot-${id}`);
 }
 
-function unsubscribeSnakeKey(id) {
-  sendRequest('*unsubscribe-data*', `snake-${id}`);
+function unsubscribeDotKey(id) {
+  sendRequest('*unsubscribe-data*', `dot-${id}`);
 }
 
 function showMessage(text, duration = 3000) {
@@ -98,29 +100,25 @@ function showMessage(text, duration = 3000) {
 }
 
 // =========================
-// Snake Management
+// Dot Management
 // =========================
-function createSnake() {
+function createDot() {
   const padding = 50;
   const x = padding + Math.random() * (canvas.width - 2 * padding);
   const y = padding + Math.random() * (canvas.height - 2 * padding);
-  // TODO 
-  // Bug when snakesize excedes 400-500 length. Weird behaviour of food spawning
-  // Probably a server High Ping problem
-  const body = [{ x, y }] // Start with just the head
   return {
-    x, y, dx: 1, dy: 0, body, size: 10,
+    x, y, dx: 1, dy: 0, size: 10,
     color: getRandomBrightColor(),
     hasPowerup: false,
     rainbowPhase: 0
   };
 }
 
-function cleanupSnake(id) {
-  console.log(`[WS] Cleaning up snake #${id}`);
-  const hadPowerup = snakes[id]?.hasPowerup;
-  delete snakes[id];
-  unsubscribeSnakeKey(id);
+function cleanupDot(id) {
+  console.log(`[WS] Cleaning up dot #${id}`);
+  const hadPowerup = dots[id]?.hasPowerup;
+  delete dots[id];
+  unsubscribeDotKey(id);
   updateLeaderboard();
   draw();
 
@@ -131,12 +129,12 @@ function cleanupSnake(id) {
 
 function resetGame() {
   if (clientId !== 0) return console.warn('Only Player #1 can reset.');
-  const oldColor = snakes[clientId]?.color || getRandomBrightColor();
-  snakes[clientId] = createSnake();
-  snakes[clientId].color = oldColor;
+  const oldColor = dots[clientId]?.color || getRandomBrightColor();
+  dots[clientId] = createDot();
+  dots[clientId].color = oldColor;
   food.length = 0;
   spawnFood();
-  sendRequest('*set-data*', `snake-${clientId}`, snakes[clientId]);
+  sendRequest('*set-data*', `dot-${clientId}`, dots[clientId]);
   sendRequest('*set-data*', 'shared-food', food);
   updateInfo();
   draw();
@@ -169,7 +167,7 @@ function updateInfo() {
 
 function updateLeaderboard() {
   leaderboardList.innerHTML = '';
-  Object.entries(snakes)
+  Object.entries(dots)
     .sort(([, a], [, b]) => b.size - a.size)
     .slice(0, 5)
     .forEach(([id, s]) => {
@@ -180,7 +178,7 @@ function updateLeaderboard() {
 }
 
 function updateSizeDisplay() {
-  const s = snakes[clientId];
+  const s = dots[clientId];
   sizeDisplay.textContent = s ? `Size: ${s.size}` : '';
 }
 
@@ -188,7 +186,7 @@ function updateSizeDisplay() {
 // WebSocket Events
 // =========================
 socket.addEventListener('open', () => {
-  sendRequest('*enter-room*', 'snake-room');
+  sendRequest('*enter-room*', 'dot-arena-room');
   sendRequest('*subscribe-client-count*');
   sendRequest('*subscribe-client-entries*');
   sendRequest('*subscribe-data*', 'shared-food');
@@ -201,15 +199,15 @@ socket.addEventListener('message', ({ data }) => {
   const msg = JSON.parse(data);
   const [selector, payload] = msg;
 
-  if (selector.startsWith('snake-')) {
+  if (selector.startsWith('dot-')) {
     const id = +selector.split('-')[1];
     if (id !== clientId) {
       if (payload === null) {
-        delete snakes[id];
+        delete dots[id];
         updateLeaderboard();
         draw();
       } else {
-        const s = snakes[id] || createSnake();
+        const s = dots[id] || createDot();
         s.x = payload.x;
         s.y = payload.y;
         s.dx = payload.dx;
@@ -218,28 +216,9 @@ socket.addEventListener('message', ({ data }) => {
         s.hasPowerup = payload.hasPowerup;
         if (payload.color) s.color = payload.color;
 
-        if (!s.body || s.body.length === 0) {
-          s.body = [{ x: s.x, y: s.y }];
-        } else {
-          const last = s.body[0];
-          const dx = s.x - last.x;
-          const dy = s.y - last.y;
-          const dist = Math.hypot(dx, dy);
-          const steps = Math.floor(dist / 2); // space between body segments
-
-          for (let i = 1; i <= steps; i++) {
-            const t = i / steps;
-            const interpolatedX = last.x + dx * t;
-            const interpolatedY = last.y + dy * t;
-            s.body.unshift({ x: interpolatedX, y: interpolatedY });
-          }
-        }
-
-        if (s.body.length > s.size) s.body.length = s.size;
-
-        snakes[id] = s;
-        snakeLastUpdated[id] = Date.now();;
-        snakeLastUpdated[id] = Date.now();
+        dots[id] = s;
+        dotLastUpdated[id] = Date.now();;
+        dotLastUpdated[id] = Date.now();
       }
     }
     return;
@@ -248,11 +227,11 @@ socket.addEventListener('message', ({ data }) => {
   switch (selector) {
     case '*client-id*':
       clientId = payload;
-      snakes[clientId] = createSnake();
+      dots[clientId] = createDot();
       if (clientId !== 0) resetBtn.style.display = 'none';
       if (clientId === 0) {
         spawnFood();
-        startStaleSnakeCleanup();
+        startStaleDotCleanup();
         setInterval(() => {
           if (food.length < 40) spawnFood();
         }, 1000);
@@ -267,20 +246,20 @@ socket.addEventListener('message', ({ data }) => {
       clientCount = payload;
       updateInfo();
       for (let i = 0; i < clientCount; i++) {
-        if (!snakes[i]) subscribeSnakeKey(i);
+        if (!dots[i]) subscribeDotKey(i);
       }
-      subscribeSnakeKey(clientId);
+      subscribeDotKey(clientId);
       break;
 
     case '*client-enter*':
       clientCount++;
       updateInfo();
-      if (payload !== clientId) subscribeSnakeKey(payload);
+      if (payload !== clientId) subscribeDotKey(payload);
       break;
 
     case '*client-exit*':
       clientCount--;
-      cleanupSnake(payload);
+      cleanupDot(payload);
       updateInfo();
       break;
 
@@ -297,9 +276,9 @@ socket.addEventListener('message', ({ data }) => {
 
 socket.addEventListener('close', () => {
   infoDisplay.textContent = 'Disconnected';
-  if (snakes[clientId]) {
-    delete snakes[clientId];
-    unsubscribeSnakeKey(clientId);
+  if (dots[clientId]) {
+    delete dots[clientId];
+    unsubscribeDotKey(clientId);
     updateLeaderboard();
     draw();
   }
@@ -309,7 +288,7 @@ socket.addEventListener('close', () => {
 // Game Loop & Cleanup
 // =========================
 function gameLoop() {
-  const s = snakes[clientId];
+  const s = dots[clientId];
   if (!s) return requestAnimationFrame(gameLoop);
 
   if (targetPosition) {
@@ -326,8 +305,6 @@ function gameLoop() {
   const speed = s.hasPowerup ? baseSpeed * 1.5 : baseSpeed;
   s.x = Math.max(0, Math.min(canvas.width, s.x + s.dx * speed));
   s.y = Math.max(0, Math.min(canvas.height, s.y + s.dy * speed));
-  s.body.unshift({ x: s.x, y: s.y });
-  if (s.body.length > s.size) s.body.pop();
 
   let ate = false;
   for (let i = food.length - 1; i >= 0; i--) {
@@ -342,7 +319,7 @@ function gameLoop() {
   const now = Date.now();
   if (now - lastSendTime > SEND_INTERVAL) {
     lastSendTime = now;
-    sendRequest('*set-data*', `snake-${clientId}`, {
+    sendRequest('*set-data*', `dot-${clientId}`, {
       x: s.x,
       y: s.y,
       dx: s.dx,
@@ -360,7 +337,7 @@ function gameLoop() {
 
     if (powerupTimers[clientId]) clearTimeout(powerupTimers[clientId]);
     powerupTimers[clientId] = setTimeout(() => {
-      snakes[clientId].hasPowerup = false;
+      dots[clientId].hasPowerup = false;
 
       const fadeDuration = 500;
       const fadeSteps = 30;
@@ -397,12 +374,12 @@ function gameLoop() {
 function checkAndRespawnPowerup() {
   if (clientId !== 0) return; // Only host manages powerups
 
-  const anyonePoweredUp = Object.values(snakes).some(s => s.hasPowerup);
+  const anyonePoweredUp = Object.values(dots).some(s => s.hasPowerup);
 
   if (!anyonePoweredUp && !powerup) {
     setTimeout(() => {
       // Double-check no one gained powerup during the wait
-      const stillNone = Object.values(snakes).every(s => !s.hasPowerup);
+      const stillNone = Object.values(dots).every(s => !s.hasPowerup);
       if (!powerup && stillNone) {
         const padding = 10;
         powerup = {
@@ -415,14 +392,14 @@ function checkAndRespawnPowerup() {
   }
 }
 
-function startStaleSnakeCleanup() {
+function startStaleDotCleanup() {
   setInterval(() => {
     const now = Date.now();
-    for (const id in snakeLastUpdated) {
-      if (+id !== clientId && now - snakeLastUpdated[id] > 5000) {
-        delete snakes[id];
-        delete snakeLastUpdated[id];
-        sendRequest('*set-data*', `snake-${id}`, null);
+    for (const id in dotLastUpdated) {
+      if (+id !== clientId && now - dotLastUpdated[id] > 5000) {
+        delete dots[id];
+        delete dotLastUpdated[id];
+        sendRequest('*set-data*', `dot-${id}`, null);
         updateLeaderboard();
         draw();
       }
@@ -466,8 +443,8 @@ function draw() {
     ctx.stroke();
   }
 
-  for (const id in snakes) {
-    const s = snakes[id];
+  for (const id in dots) {
+    const s = dots[id];
 
     if (s.hasPowerup) {
       // Cycle hue for rainbow effect
@@ -477,18 +454,15 @@ function draw() {
       ctx.fillStyle = s.color;
     }
 
-    const visibleBody = s.body.slice(0, Math.min(s.body.length, 150));
-    visibleBody.forEach(({ x, y }) => {
-      ctx.beginPath();
-      ctx.arc(x, y, 5, 0, Math.PI * 2);
-      ctx.fill();
-    });
+    ctx.beginPath();
+    // Dot draw
+    ctx.arc(s.x, s.y, 8, 0, Math.PI * 2);
+    ctx.fill();
 
-    const head = s.body[0];
     ctx.fillStyle = 'white';
     ctx.font = '14px Arial';
     ctx.textAlign = 'center';
-    ctx.fillText(`#${+id + 1}`, head.x, head.y - 10);
+    ctx.fillText(`#${+id + 1}`, s.x, s.y - 10);
   }
 
   if (powerupMessageOpacity > 0) {
