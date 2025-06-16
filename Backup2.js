@@ -30,6 +30,7 @@ let powerupMessageHue = 0;
 let powerupMessageTimeout = null;
 let powerupTimerDisplay = 0;
 let powerupRemainingTime = 0;
+let powerupRotation = 0;
 
 let globalTimerSeconds = 0;    // Remaining seconds on the global timer
 let globalTimerInterval = null;
@@ -40,7 +41,7 @@ let lastSendTime = 0;
 const SEND_INTERVAL = 20; // milliseconds
 
 // Changed to Dots
-const dots = {};              // { id: dotObject }
+const dots = {};   // { id: dotObject }
 const food = [];   // Array of food objects
 // Changed to Dot
 const dotLastUpdated = {};    // { id: timestamp }
@@ -523,7 +524,37 @@ function startStaleDotCleanup() {
 // =========================
 // Rendering
 // =========================
-function drawStar(ctx, cx, cy, spikes, outerRadius, innerRadius) {
+const stars = [];
+
+for (let i = 0; i < 150; i++) {
+  stars.push({
+    x: Math.random() * canvas.width,
+    y: Math.random() * canvas.height,
+    radius: Math.random() * 0.8 + 0.2, // very small stars
+    speed: Math.random() * 0.3 + 0.1, // slow drift
+  });
+}
+
+function drawStars() {
+  ctx.fillStyle = `rgba(255, 255, 255, ${Math.random() * 0.5 + 0.5})`;
+  for (let star of stars) {
+    // Move the star down slowly
+    star.y += star.speed;
+
+    // If the star moves off the screen, reset it to the top
+    if (star.y > canvas.height) {
+      star.y = 0;
+      star.x = Math.random() * canvas.width;
+    }
+
+    // Draw the tiny star
+    ctx.beginPath();
+    ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawPowerUp(ctx, cx, cy, spikes, outerRadius, innerRadius) {
   let rot = Math.PI / 2 * 3;
   let x = cx;
   let y = cy;
@@ -547,8 +578,13 @@ function drawStar(ctx, cx, cy, spikes, outerRadius, innerRadius) {
 }
 
 function draw() {
+  powerupRotation += 0.01; // radians per frame (~0.57°)
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  drawStars();
 
   ctx.fillStyle = 'lime';
   food.forEach(({ x, y }) => {
@@ -573,13 +609,16 @@ function draw() {
     ctx.fill();
 
     // Draw star
-    drawStar(ctx, powerup.x, powerup.y, 5, 12, 6);
+    drawPowerUp(ctx, powerup.x, powerup.y, 5, 12, 6);
+    ctx.save();
+    ctx.translate(powerup.x, powerup.y);
+    ctx.rotate(powerupRotation);
+    drawPowerUp(ctx, 0, 0, 5, 12, 6);
     ctx.fillStyle = 'gold';
     ctx.strokeStyle = 'orange';
     ctx.lineWidth = 2;
     ctx.fill();
     ctx.stroke();
-
     ctx.restore();
   }
 
