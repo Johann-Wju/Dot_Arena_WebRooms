@@ -48,6 +48,7 @@ const dotLastUpdated = {};    // { id: timestamp }
 // =========================
 // Initialization
 // =========================
+resetBtn.style.display = 'none';
 updateTimerDisplay();
 resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
@@ -149,7 +150,7 @@ function resetGame() {
 function spawnFood() {
   if (clientId !== 0) return;
   const padding = 10;
-  const toAdd = 40 - food.length;
+  const toAdd = 60 - food.length;
   for (let i = 0; i < toAdd; i++) {
     food.push({
       x: padding + Math.random() * (canvas.width - 2 * padding),
@@ -250,7 +251,7 @@ socket.addEventListener('message', ({ data }) => {
         spawnFood();
         startStaleDotCleanup();
         setInterval(() => {
-          if (food.length < 40) spawnFood();
+          if (food.length < 60) spawnFood();
         }, 1000);
         checkAndRespawnPowerup();
 
@@ -315,13 +316,12 @@ socket.addEventListener('message', ({ data }) => {
 
     case 'shared-game-ended':
       gameEnded = payload === true;
-      if (gameEnded) {
-        // Optionally hide/reset UI elements except reset button for client 0
-        if (clientId !== 0) {
-          resetBtn.style.display = 'none';
-        } else {
-          resetBtn.style.display = 'block';
-        }
+
+      // Show reset only if game has ended AND this is client 0
+      if (gameEnded && clientId === 0) {
+        resetBtn.style.display = 'block';
+      } else {
+        resetBtn.style.display = 'none';
       }
       break;
 
@@ -392,7 +392,7 @@ function gameLoop(currentTime) {
   }
 
   const baseSpeed = 1;
-  const speed = s.hasPowerup ? baseSpeed * 1.5 : baseSpeed;
+  const speed = s.hasPowerup ? baseSpeed * 1.75 : baseSpeed;
   s.x = Math.max(0, Math.min(canvas.width, s.x + s.dx * speed));
   s.y = Math.max(0, Math.min(canvas.height, s.y + s.dy * speed));
 
@@ -499,7 +499,7 @@ function checkAndRespawnPowerup() {
         };
         sendRequest('*set-data*', 'shared-powerup', powerup);
       }
-    }, 20000); // Wait 20 seconds before respawning
+    }, 15000); // Wait 15 seconds before respawning
   }
 }
 
