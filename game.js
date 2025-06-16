@@ -31,6 +31,7 @@ let powerupMessageTimeout = null;
 let powerupTimerDisplay = 0;
 let powerupRemainingTime = 0;
 let powerupRotation = 0;
+let powerupRespawnTimeoutId = null;
 
 let globalTimerSeconds = 0;    // Remaining seconds on the global timer
 let globalTimerInterval = null;
@@ -101,7 +102,7 @@ function unsubscribeDotKey(id) {
   sendRequest('*unsubscribe-data*', `dot-${id}`);
 }
 
-function showMessage(text, duration = 3000) {
+function showMessage(text, duration = 5000) {
   clearTimeout(messageTimeout);
   messageDiv.textContent = text;
   messageDiv.style.opacity = '1';
@@ -308,6 +309,9 @@ socket.addEventListener('message', ({ data }) => {
 
     case 'shared-powerup':
       powerup = payload;
+      if (clientId === 0) {
+        checkAndRespawnPowerup();
+      }
       break;
 
     case 'shared-timer':
@@ -486,10 +490,15 @@ function gameLoop(currentTime) {
 function checkAndRespawnPowerup() {
   if (clientId !== 0) return; // Only host manages powerups
 
+  if (powerupRespawnTimeoutId !== null) {
+    // A respawn timer is already running, so don't start another
+    return;
+  }
+
   const anyonePoweredUp = Object.values(dots).some(s => s.hasPowerup);
 
   if (!anyonePoweredUp && !powerup) {
-    setTimeout(() => {
+    powerupRespawnTimeoutId = setTimeout(() => {
       // Double-check no one gained powerup during the wait
       const stillNone = Object.values(dots).every(s => !s.hasPowerup);
       if (!powerup && stillNone) {
@@ -500,7 +509,8 @@ function checkAndRespawnPowerup() {
         };
         sendRequest('*set-data*', 'shared-powerup', powerup);
       }
-    }, 15000); // Wait 15 seconds before respawning
+      powerupRespawnTimeoutId = null; // Clear the timer ID once done
+    }, 15000); // Wait 10 seconds before respawning
   }
 }
 
@@ -526,31 +536,61 @@ function startStaleDotCleanup() {
 // =========================
 const stars = [];
 
-for (let i = 0; i < 150; i++) {
+for (let i = 0; i < 200; i++) {
+  const isShooting = Math.random() < 0.05; // 5% chance to be shooting star
   stars.push({
     x: Math.random() * canvas.width,
     y: Math.random() * canvas.height,
-    radius: Math.random() * 0.8 + 0.2, // very small stars
-    speed: Math.random() * 0.3 + 0.1, // slow drift
+    radius: Math.random() * 0.8 + 0.2,
+    speed: isShooting
+      ? Math.random() * 4 + 2  // faster for shooting stars
+      : Math.random() * 0.3 + 0.1,
+    isShooting,
+    trail: [],  // will hold previous positions for trail effect
   });
 }
 
 function drawStars() {
-  ctx.fillStyle = `rgba(255, 255, 255, ${Math.random() * 0.5 + 0.5})`;
   for (let star of stars) {
-    // Move the star down slowly
+    // Move star
     star.y += star.speed;
 
-    // If the star moves off the screen, reset it to the top
+    // Reset if off screen
     if (star.y > canvas.height) {
       star.y = 0;
       star.x = Math.random() * canvas.width;
+      star.trail = [];
     }
 
-    // Draw the tiny star
-    ctx.beginPath();
-    ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
-    ctx.fill();
+    if (star.isShooting) {
+      // Add current position to trail array (limit trail length)
+      star.trail.push({ x: star.x, y: star.y });
+      if (star.trail.length > 15) {
+        star.trail.shift(); // remove oldest trail position
+      }
+
+      // Draw trail with fading opacity
+      for (let i = 0; i < star.trail.length; i++) {
+        const pos = star.trail[i];
+        const alpha = (i + 1) / star.trail.length * 0.5; // fade out trail
+        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, star.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Draw the shooting star itself brighter
+      ctx.fillStyle = 'rgba(255, 255, 255, 1)';
+      ctx.beginPath();
+      ctx.arc(star.x, star.y, star.radius + 0.5, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // Normal star flicker
+      ctx.fillStyle = `rgba(255, 255, 255, ${Math.random() * 0.5 + 0.5})`;
+      ctx.beginPath();
+      ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 }
 
@@ -577,19 +617,60 @@ function drawPowerUp(ctx, cx, cy, spikes, outerRadius, innerRadius) {
   ctx.closePath();
 }
 
+function drawSmiley(ctx, x, y, radius) {
+  const eyeRadius = radius * 0.15;
+  const eyeOffsetX = radius * 0.4;
+  const eyeOffsetY = radius * 0.3;
+  const smileRadius = radius * 0.6;
+
+  ctx.save();
+  ctx.strokeStyle = 'black';
+  ctx.lineWidth = 1;
+
+  // Eyes
+  ctx.beginPath();
+  ctx.fillStyle = 'black';
+  // Left eye
+  ctx.arc(x - eyeOffsetX, y - eyeOffsetY, eyeRadius, 0, Math.PI * 2);
+  // Right eye
+  ctx.arc(x + eyeOffsetX, y - eyeOffsetY, eyeRadius, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Smile
+  ctx.beginPath();
+  ctx.arc(x, y, smileRadius, 0, Math.PI);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
 function draw() {
   powerupRotation += 0.01; // radians per frame (~0.57°)
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-
+  // Black Background
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   drawStars();
 
+  // Food is drawn
   ctx.fillStyle = 'lime';
   food.forEach(({ x, y }) => {
+    // Create a radial gradient for the glowing effect
+    const gradient = ctx.createRadialGradient(x, y, 0, x, y, 12);
+    gradient.addColorStop(0, 'rgba(144, 238, 144, 1)');       // bright lime center (lightgreen)
+    gradient.addColorStop(0.7, 'rgba(50, 205, 50, 0.7)');     // medium lime
+    gradient.addColorStop(1, 'rgba(50, 205, 50, 0)');         // transparent edges
+
+    ctx.fillStyle = gradient;
     ctx.beginPath();
     ctx.arc(x, y, 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Optional: Draw solid lime core for sharper center
+    ctx.fillStyle = 'lime';
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
     ctx.fill();
   });
 
@@ -637,6 +718,9 @@ function draw() {
     // Dot draw
     ctx.arc(s.x, s.y, DotDrawSize, 0, Math.PI * 2);
     ctx.fill();
+
+    // Draw smiley face on dot
+    drawSmiley(ctx, s.x, s.y, DotDrawSize);
 
     ctx.fillStyle = 'white';
     ctx.font = '14px Arial';
