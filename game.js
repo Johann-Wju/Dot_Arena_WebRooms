@@ -16,15 +16,6 @@ const socket = new WebSocket(serverAddr);
 const DotDrawSize = 10;
 
 // =========================
-// Mobile Devices
-// =========================
-const isMobile = /Mobi|Android/i.test(navigator.userAgent);
-let cameraX = 0;
-let cameraY = 0;
-const cameraZoom = 1.5;  // You can tweak this value for more or less zoom
-
-
-// =========================
 // Game State
 // =========================
 let clientId = null;
@@ -656,47 +647,27 @@ function drawSmiley(ctx, x, y, radius) {
 function draw() {
   powerupRotation += 0.01; // radians per frame (~0.57°)
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-
   // Black Background
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  const player = dots[clientId];
-  if (!player) return; // Safety check
-
-  // Calculate camera position for mobile: center the player with zoom
-  if (isMobile) {
-    cameraX = player.x - canvas.width / (2 * cameraZoom);
-    cameraY = player.y - canvas.height / (2 * cameraZoom);
-  } else {
-    cameraX = 0;
-    cameraY = 0;
-  }
-
-  ctx.save();
-
-  // Apply camera zoom & pan only on mobile
-  if (isMobile) {
-    ctx.scale(cameraZoom, cameraZoom);
-    ctx.translate(-cameraX, -cameraY);
-  }
-
-  // Now draw all game elements offset by camera transform:
 
   drawStars();
 
   // Food is drawn
   ctx.fillStyle = 'lime';
   food.forEach(({ x, y }) => {
+    // Create a radial gradient for the glowing effect
     const gradient = ctx.createRadialGradient(x, y, 0, x, y, 12);
-    gradient.addColorStop(0, 'rgba(144, 238, 144, 1)');
-    gradient.addColorStop(0.7, 'rgba(50, 205, 50, 0.7)');
-    gradient.addColorStop(1, 'rgba(50, 205, 50, 0)');
+    gradient.addColorStop(0, 'rgba(144, 238, 144, 1)');       // bright lime center (lightgreen)
+    gradient.addColorStop(0.7, 'rgba(50, 205, 50, 0.7)');     // medium lime
+    gradient.addColorStop(1, 'rgba(50, 205, 50, 0)');         // transparent edges
+
     ctx.fillStyle = gradient;
     ctx.beginPath();
     ctx.arc(x, y, 6, 0, Math.PI * 2);
     ctx.fill();
 
+    // Optional: Draw solid lime core for sharper center
     ctx.fillStyle = 'lime';
     ctx.beginPath();
     ctx.arc(x, y, 3, 0, Math.PI * 2);
@@ -730,14 +701,13 @@ function draw() {
     ctx.fill();
     ctx.stroke();
     ctx.restore();
-
-    ctx.restore();
   }
 
   for (const id in dots) {
     const s = dots[id];
 
     if (s.hasPowerup) {
+      // Cycle hue for rainbow effect
       s.rainbowPhase = (s.rainbowPhase + 5) % 360;
       ctx.fillStyle = `hsl(${s.rainbowPhase}, 100%, 50%)`;
     } else {
@@ -745,21 +715,21 @@ function draw() {
     }
 
     ctx.beginPath();
+    // Dot draw
     ctx.arc(s.x, s.y, DotDrawSize, 0, Math.PI * 2);
     ctx.fill();
 
+    // Draw smiley face on dot
     drawSmiley(ctx, s.x, s.y, DotDrawSize);
 
     ctx.fillStyle = 'white';
     ctx.font = '14px Arial';
     ctx.textAlign = 'center';
 
+    // Draw client number and size score
     ctx.fillText(`#${+id + 1}: ${Math.floor(s.size)}`, s.x, s.y - 10);
   }
 
-  ctx.restore(); // Restore from camera transform before drawing UI
-
-  // Draw UI elements (powerup message) with fixed screen coords (no zoom/translate)
   if (powerupMessageOpacity > 0) {
     powerupMessageHue = (powerupMessageHue + 4) % 360;
     ctx.save();
@@ -771,10 +741,12 @@ function draw() {
     ctx.shadowBlur = 8;
     ctx.fillText(powerupMessage, canvas.width / 2, canvas.height / 2);
 
+    // Draw timer while fading (if opacity > 0)
     if (powerupTimerDisplay > 0 || powerupMessageOpacity > 0) {
       ctx.font = '32px Arial';
       ctx.fillText(powerupTimerDisplay.toFixed(1) + 's', canvas.width / 2, canvas.height / 2 + 60);
     }
+
     ctx.restore();
   }
 }
