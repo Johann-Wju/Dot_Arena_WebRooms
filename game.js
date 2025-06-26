@@ -199,7 +199,7 @@ function updateTimerDisplay() {
 // WebSocket Events
 // =========================
 socket.addEventListener('open', () => {
-  sendRequest('*enter-room*', 'dot-arena-room');
+  sendRequest('*enter-room*', 'dot-arena');
   sendRequest('*subscribe-client-count*');
   sendRequest('*subscribe-client-entries*');
   sendRequest('*subscribe-data*', 'shared-food');
